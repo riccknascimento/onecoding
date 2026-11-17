@@ -9,6 +9,9 @@ use one_protocol::StoreStatus;
 use rusqlite::Connection;
 
 mod migrations;
+mod runs;
+
+pub use runs::{FinishInfo, NewRun};
 
 pub use migrations::LATEST_VERSION;
 
@@ -312,7 +315,7 @@ mod tests {
         );
 
         let s = Store::open(&p).unwrap();
-        assert_eq!(s.schema_version().unwrap(), 2);
+        assert_eq!(s.schema_version().unwrap(), LATEST_VERSION);
         let c = s.conn();
         // dados preservados, inclusive a referência de runs -> tasks
         let n: i64 = c
@@ -348,7 +351,10 @@ mod tests {
         );
         drop(s);
         // idempotente: reabrir não reaplica
-        assert_eq!(Store::open(&p).unwrap().schema_version().unwrap(), 2);
+        assert_eq!(
+            Store::open(&p).unwrap().schema_version().unwrap(),
+            LATEST_VERSION
+        );
         let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
 
@@ -442,5 +448,209 @@ mod tests {
             .execute("UPDATE audit_log SET outcome='x'", [])
             .is_err());
         assert!(s.conn().execute("DELETE FROM audit_log", []).is_err());
+    }
+
+    #[test]
+    fn run_lifecycle_persists_events_usage_and_survives_reopen() {
+        use one_protocol::{ErrorKind, EventPayload, ExecMode, RunStatus, UsageInfo};
+        let p = temp_db("runs");
+        let run_id = {
+            let s = Store::open(&p).unwrap();
+            s.ensure_local_gateway().unwrap();
+            let ws = s.workspace_add("local", "/tmp/proj", "proj").unwrap();
+            assert_eq!(
+                s.workspace_add("local", "/tmp/proj", "outro").unwrap().id,
+                ws.id,
+                "idempotente por caminho"
+            );
+            let id = s
+                .run_create(&NewRun {
+                    workspace_id: &ws.id,
+                    engine: "codex",
+                    model: None,
+                    mode: ExecMode::ReadOnly,
+                    prompt: "oi",
+                })
+                .unwrap();
+            s.run_mark_running(&id).unwrap();
+            let e1 = s
+                .event_append(
+                    &id,
+                    &EventPayload::Message {
+                        text: "olá".into()
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            let e2 = s
+                .event_append(
+                    &id,
+                    &EventPayload::Status {
+                        status: RunStatus::Running,
+                    },
+                )
+                .unwrap()
+                .unwrap();
+            assert_eq!((e1.seq, e2.seq), (1, 2));
+            s.run_finish(
+                &id,
+                &FinishInfo {
+                    status: Some(RunStatus::Succeeded),
+                    exit_code: Some(0),
+                    duration_ms: Some(1234),
+                    usage: UsageInfo {
+                        input_tokens: Some(10),
+                        output_tokens: Some(2),
+                        ..Default::default()
+                    },
+                    tool_calls: 3,
+                    engine_session_id: Some("th1".into()),
+                    final_text: Some("pronto".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            // um estado final não é sobrescrito
+            s.run_finish(
+                &id,
+                &FinishInfo {
+                    status: Some(RunStatus::Failed),
+                    error_kind: Some(ErrorKind::Timeout),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            id
+        };
+        let s = Store::open(&p).unwrap(); // "reinício do app"
+        let v = s.run_get(&run_id).unwrap().unwrap();
+        assert_eq!(v.status, RunStatus::Succeeded);
+        assert_eq!(
+            (
+                v.usage.input_tokens,
+                v.usage.cached_tokens,
+                v.tool_calls,
+                v.duration_ms
+            ),
+            (Some(10), None, 3, Some(1234))
+        );
+        assert_eq!(v.model_reported, None, "modelo ausente continua ausente");
+        assert_eq!(v.engine_session_id.as_deref(), Some("th1"));
+        assert_eq!(s.events_after(&run_id, 0).unwrap().len(), 2);
+        assert_eq!(s.events_after(&run_id, 1).unwrap()[0].seq, 2);
+        assert_eq!(s.runs_list(10).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn reconcile_marks_active_runs_as_interrupted_and_keeps_finished_ones() {
+        use one_protocol::{ErrorKind, ExecMode, RunStatus};
+        let s = Store::open_in_memory().unwrap();
+        s.ensure_local_gateway().unwrap();
+        let ws = s.workspace_add("local", "/tmp/p", "p").unwrap();
+        let mk = || {
+            s.run_create(&NewRun {
+                workspace_id: &ws.id,
+                engine: "codex",
+                model: Some("m"),
+                mode: ExecMode::ReadOnly,
+                prompt: "x",
+            })
+            .unwrap()
+        };
+        let (a, b) = (mk(), mk());
+        s.run_mark_running(&a).unwrap();
+        s.run_finish(
+            &b,
+            &FinishInfo {
+                status: Some(RunStatus::Succeeded),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(s.reconcile_interrupted().unwrap(), 1);
+        let va = s.run_get(&a).unwrap().unwrap();
+        assert_eq!(
+            (va.status, va.error_kind),
+            (RunStatus::Failed, Some(ErrorKind::Interrupted))
+        );
+        assert_eq!(s.run_get(&b).unwrap().unwrap().status, RunStatus::Succeeded);
+    }
+
+    #[test]
+    fn event_limits_and_sql_safety() {
+        use one_protocol::{EventPayload, ExecMode};
+        let s = Store::open_in_memory().unwrap();
+        s.ensure_local_gateway().unwrap();
+        let ws = s
+            .workspace_add("local", "/tmp/o'; DROP TABLE runs;--", "x\" OR 1=1")
+            .unwrap();
+        let id = s
+            .run_create(&NewRun {
+                workspace_id: &ws.id,
+                engine: "codex",
+                model: None,
+                mode: ExecMode::ReadOnly,
+                prompt: "'); DROP TABLE tasks;--",
+            })
+            .unwrap();
+        assert!(
+            s.run_get(&id).unwrap().is_some(),
+            "entradas hostis são só dados"
+        );
+        assert!(
+            s.event_append(
+                &id,
+                &EventPayload::Message {
+                    text: "a".repeat(20_000)
+                }
+            )
+            .is_err(),
+            "payload grande é recusado"
+        );
+        for _ in 0..2000 {
+            s.event_append(
+                &id,
+                &EventPayload::Warning {
+                    message: "w".into(),
+                },
+            )
+            .unwrap()
+            .unwrap();
+        }
+        assert!(
+            s.event_append(
+                &id,
+                &EventPayload::Warning {
+                    message: "w".into()
+                }
+            )
+            .unwrap()
+            .is_none(),
+            "limite por execução"
+        );
+    }
+
+    #[test]
+    fn upgrade_v2_to_v3_keeps_existing_runs() {
+        let p = temp_db("v3up");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        {
+            let c = Connection::open(&p).unwrap();
+            c.pragma_update(None, "foreign_keys", "ON").unwrap();
+            migrations::apply_with(&c, &migrations::MIGRATIONS[..2]).unwrap();
+            c.execute_batch(
+                "INSERT INTO gateways(id,name,kind) VALUES('g','G','local');
+                 INSERT INTO projects(id,name,gateway_id,path) VALUES('p','p','g','/p');
+                 INSERT INTO tasks(id,gateway_id,project_id,engine,mode,prompt) VALUES('t','g','p','codex','read_only','x');
+                 INSERT INTO runs(id,task_id,status) VALUES('r','t','succeeded');",
+            ).unwrap();
+        }
+        let s = Store::open(&p).unwrap();
+        assert_eq!(s.schema_version().unwrap(), LATEST_VERSION);
+        let v = s.run_get("r").unwrap().unwrap();
+        assert_eq!((v.tool_calls, v.attempts, v.model_reported), (0, 1, None));
+        assert!(PathBuf::from(format!("{}.pre-v3.bak", p.display())).exists());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
 }

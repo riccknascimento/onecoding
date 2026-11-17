@@ -4,6 +4,12 @@ fn main() {
         "store_status",
         "detect_local_gateway",
         "approve_executable",
+        "list_workspaces",
+        "authorize_workspace",
+        "start_run",
+        "cancel_run",
+        "list_runs",
+        "get_run",
     ]);
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(app))
         .expect("falha no tauri-build");

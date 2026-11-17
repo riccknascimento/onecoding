@@ -94,3 +94,9 @@ Sem medição não há otimização: a primeira entrega da Fase 2 já grava esse
 - Chamar o LLM para tarefas que um comando resolve.
 - Repetir uma ação que já falhou duas vezes com o mesmo resultado.
 - Trocar de modelo para "garantir" qualidade sem medir.
+
+## 10. OneUsage básico (Fase 2A, implementado)
+
+Por execução, em `runs` (migração V3): duração (`duration_ms`), motor, modelo solicitado (`tasks.model`), modelo **informado** (`model_reported`, vazio se o motor não informa), status, `tool_calls` (contagem das chamadas de ferramenta observadas), tokens de entrada/saída/cache/raciocínio **como informados pelo motor** (`NULL` quando ausentes), `attempts` (1 nesta fase; sem retentativa automática) e erro (`error_kind`/`error_message`). Nada é estimado. Exemplo real (Codex 0.169.0): 45.017 tokens de entrada, 34.048 em cache, 169 de saída, 2 chamadas de ferramenta, 9,9 s.
+
+Fora do escopo desta fase: painel, percentuais de assinatura, preço e troca automática de motor.

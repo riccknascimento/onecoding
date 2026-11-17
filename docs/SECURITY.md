@@ -116,3 +116,40 @@ Endurecimento adicional: comandos Tauri sob ACL por comando (`AppManifest`; a ca
 - Um descendente que se separe do grupo (nova sessão) pode sobreviver; a saída para de ser coletada, mas o processo não é morto.
 - `foreign key` não substitui autorização: a validação de acesso entre clientes continua sendo da aplicação (Fase 3).
 - Aprovação depende de o usuário reconhecer o arquivo no diálogo.
+
+## 13. Execução real (Fase 2A, Codex)
+
+| Controle | Onde | Verificação |
+|---|---|---|
+| Só binário aprovado, com identidade **revalidada imediatamente antes do exec** (além da checagem no `start`) | `one-exec` + `acquire` | `identity_is_revalidated_immediately_before_exec` (host que troca a identidade na 2ª inspeção: o processo nem inicia) |
+| A webview envia só `workspace_id`, motor, modelo e prompt. Caminho, flags e comandos não existem no contrato | `StartRunRequest`, comandos Tauri sob ACL | `run_commands_are_reachable_and_enforce_policy_through_the_webview` |
+| Workspace só por seletor **nativo** de pasta; recusa raiz, pastas do sistema e a pasta pessoal (ou ancestral); revalida o caminho canônico a cada execução (troca por symlink é recusada) | `workspace.rs`, `start` | `rejects_root_system_home…`, `workspace_path_swapped_for_a_symlink_is_refused` |
+| Somente leitura: `-s read-only`; `workspace-write`, `danger-full-access`, `--dangerously-*` e `--full-auto` nunca são pedidos; modo `write` é recusado pelo adaptador | `CodexAdapter` | `args_are_structured_read_only_and_never_dangerous` |
+| `--ignore-user-config`: MCPs, plugins e hooks do `config.toml` do usuário não carregam (a autenticação continua) | `CodexAdapter` | idem |
+| Prompt por **stdin**, nunca em argv; modelo validado (não vira flag) | adaptador + proc | `approved_cli_runs…` (`argv` sem o prompt), `write_mode_and_bad_models_are_refused` |
+| Uma execução por workspace; cancelamento, prazo (10 min) e limite de saída (8 MiB) encerram o **grupo de processos** | `ExecService`, `proc.rs` | `one_run_per_workspace…`, `cancel_stops…`, `timeout_is_enforced…`, `output_flood…` |
+| Não se persistem saídas brutas de comandos; textos e comandos passam por truncamento e redação de segredos conhecidos; teto de 2000 eventos e 16 KB por evento | `engine.rs`, `runs.rs` | `command_output_is_never_kept`, `redaction_masks_common_secrets`, `event_limits_and_sql_safety` |
+| Estado final sempre gravado: guarda contra pânico e reconciliação de execuções ativas ao abrir o app | `Guard`, `reconcile_interrupted` | `history_survives_restart…` |
+| Auditoria: autorização de workspace, início, cancelamento e pedidos bloqueados | `audit_log` | `unapproved_cli_is_blocked…` |
+
+**Riscos residuais novos (declarados):**
+- **Leitura confinada ao workspace (corrigido nesta fase, ver `ISOLATION.md`).** O `-s read-only` do Codex não restringia leitura (medido). O adaptador passa a usar, por padrão, o perfil de permissão oficial do Codex (Beta) com `:root` negado: leitura de `~`, `/tmp`, outros projetos, `~/.ssh` e `~/.codex/auth.json` é negada pelo SO (teste por canário, sem custo de modelo). Limites: recurso Beta; só os comandos do agente são confinados, não o processo do Codex; a negação dentro do `codex exec` não foi observada porque o agente recusa antes de tentar; `git` e `node` falham dentro do agente. `TrustedLocalRead` (leitura ampla) existe só na API do adaptador, não na interface.
+- O `codex exec --json` **não informa o modelo** usado: `model_reported` fica vazio em vez de ser inferido.
+- A redação cobre padrões comuns (chaves com prefixo, Bearer, JWT, `X_TOKEN=`); não é garantia contra qualquer segredo.
+- O resumo de ferramentas (comando) é persistido truncado em 300 caracteres e pode conter caminhos locais.
+- Aprovação do Codex e autorização de pasta continuam dependendo de você reconhecer o que o diálogo mostra.
+
+**Janela entre a revalidação e o `exec` (achado 4 da revisão da Fase 2A, risco aceito).** A identidade é revalidada imediatamente antes de iniciar o processo e o caminho executado é o canônico verificado, mas o macOS não oferece `fexecve` e o `Command` resolve o arquivo de novo: o que a revalidação garante é "o arquivo era o aprovado há instantes", não "o objeto executado é o verificado". Para explorar a janela é preciso substituir o binário ou um diretório do caminho, e esses caminhos só são aceitos se pertencerem a você ou a root e não forem graváveis por grupo, outros ou ACL; ou seja, quem consegue já tem o seu nível de privilégio (e poderia alterar o próprio app ou o banco). Mitigações possíveis futuras: executar uma cópia privada imutável (inviável para pacotes npm com arquivos relativos) ou Gateway sob usuário dedicado.
+
+**Workspace entre `start` e o exec:** o caminho é revalidado (canônico, pasta válida, igual ao autorizado **e o mesmo diretório no disco: dispositivo + inode capturados no `start`**, o que detecta a pasta ser removida e recriada no mesmo caminho) dentro da thread, imediatamente antes de iniciar, e o Codex recebe esse caminho canônico em `-C` e como diretório de trabalho. Resta a mesma janela mínima, com a mesma ressalva de privilégio.
+
+Limite explícito: a identidade do diretório (inode) é fixada no início de cada execução, não no momento da autorização da pasta; recriar a pasta do projeto entre execuções (ex.: novo clone) continua válido de propósito. As permissões dos diretórios pais do workspace não são verificadas.
+
+## 14. Limitações registradas no encerramento da Fase 2A
+
+- **Git e Node não funcionam dentro do agente** no modo restrito (medido). Foi decisão deliberada **não** liberar caminhos para consertar isso (`ISOLATION.md` §6).
+- O perfil de permissão do Codex é **Beta** e confina os **comandos** do agente, não o processo do Codex inteiro; não é garantia absoluta de isolamento.
+- `TrustedLocalRead` não é exposto na interface e não há mecanismo de ativação para o usuário.
+- Não há sandbox de Linux nem de Windows; a verificação de ACL falha fechada fora do macOS.
+- Dentro do `codex exec` a negação pelo SO não foi observada (o agente recusa antes de tentar); a prova a nível de SO usa `codex sandbox` com o mesmo perfil.
+- A execução por interface (aprovar o Codex, autorizar pasta, enviar tarefa e ver o histórico) **não tem confirmação registrada**: o banco real do usuário não contém aprovações, workspaces nem execuções.

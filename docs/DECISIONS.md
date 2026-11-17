@@ -45,7 +45,10 @@ Versões fixadas: `tauri` 2.12.x, `@tauri-apps/api` 2.12.5, `@tauri-apps/cli` 2.
 ### D-003 — Linguagem do OneHub · **Aceita: Rust** · **Implementada** (`src-tauri` + `one-store`)
 ### D-004 — Linguagem do Gateway · **Aceita: Rust** · **Implementada parcialmente** (`one-adapters`; o binário do Gateway ainda não existe)
 
-### D-005 — Sandbox no macOS · **Pendente**
+### D-005 — Sandbox no macOS · **Parcialmente resolvida (Fase 2A; ver `ISOLATION.md`)**
+Leitura confinada pelo perfil de permissão do Codex (D-024). Seatbelt externo próprio foi **rejeitado**: o Codex deixa de executar comandos dentro dele. Pendentes: modo restrito para terceiros com usuário dedicado/VM e o modo de VPS.
+
+(texto anterior)
 Proposta: MVP confia nas sandboxes das CLIs + verificação pós-execução + worktree isolada. Reavaliar na fase de endurecimento. Fatos [D]: Cursor headless exige `--sandbox enabled` ou `--force` para escrita; a documentação do sandbox não foi lida.
 
 ### D-006 — Aprovação no meio da execução · **Proposta**
@@ -92,6 +95,24 @@ Detectar ≠ executar. Aprovação humana por diálogo nativo; identidade persis
 
 ### D-019 — Migração V2 · **Implementada**
 Aplicada no banco real do usuário na primeira abertura (V1 vazio → V2), com cópia `oneagent.db.pre-v2.bak` ao lado. Mudanças futuras: nunca editar uma migração publicada.
+
+### D-020 — Execução do Codex (Fase 2A) · **Implementada**
+`codex exec --json --ignore-user-config --ephemeral --skip-git-repo-check --color never -s read-only -C <workspace> [-m <modelo>] -` com o prompt por stdin (Codex 0.169.0, conferido no `--help` e em execuções reais). `--ephemeral` evita gravar rollout em `~/.codex`; `--ignore-user-config` evita carregar MCPs/plugins do usuário. Sem `app-server` e sem tokens (D-015). Formato de eventos observado: `thread.started`, `turn.started`, `item.started/completed` (`agent_message`, `command_execution`, `error`), `turn.completed{usage}`, `error`, `turn.failed`; o modelo **não** aparece.
+
+### D-021 — UI acompanha a execução por consulta (polling, 400 ms) · **Implementada**
+Sem permissão de eventos na webview e sem canal extra: os eventos já estão no SQLite e a UI lê `get_run(run_id, after_seq)`. Troca por push é possível depois sem mudar o contrato.
+
+### D-022 — Contrato independente de motor · **Implementada**
+`EngineAdapter` (argumentos estruturados + `EngineParser` incremental) normaliza para `EventPayload`/`RunView`. Claude e Cursor entram implementando o mesmo trait (Fase 2B); o serviço (`one-exec`) não conhece formato de motor.
+
+### D-023 — Sessão do motor ≠ contexto da tarefa · **Implementada**
+`runs.engine_session_id` guarda a sessão interna (thread do Codex) separada de `tasks`/`conversations`; o contexto da tarefa (prompt, workspace, resumo) é do OneAgent. É a base do OneContext Handoff (não implementado).
+
+### D-024 — Confinamento de leitura do Codex · **Implementada (padrão), decisão do usuário pendente sobre o modo amplo**
+`default_permissions="oa_workspace_ro"` + perfil `:root=deny, :minimal=read, :tmpdir=deny, :slash_tmp=deny, :workspace_roots={"."=read}`, sem `-s` (o sandbox legado anularia o perfil). Evidência em `ISOLATION.md` e nos testes `os_level_profile_denies_reads_outside_the_workspace` (SO) e `real_codex_*` (execução real). Custo medido: `git` (Xcode CLT) e `node` falham dentro do agente. `Confinement::TrustedLocalRead` não é exposto. Recurso Beta: reexecutar o teste de SO a cada versão do Codex.
+
+### D-025 — Decisões de encerramento da Fase 2A · **Aceita**
+(1) Perfil restrito de leitura como padrão. (2) `TrustedLocalRead` não exposto na interface. (3) Nenhuma permissão ampliada para consertar Git/Node. (4) Limitação de Git/Node registrada. (5) Três modos futuros: Investigação Restrita (atual), Desenvolvimento Isolado e Administração Autorizada (`ISOLATION.md` §6). (6) O perfil Beta não é garantia absoluta de isolamento do processo inteiro. (7) Sem sandbox de Linux ou Windows nesta fase.
 
 ## Riscos e incompatibilidades (atualizados)
 

@@ -4,7 +4,9 @@
 import gatewayFixture from "../../../../protocol/fixtures/gateway.json";
 import runFixture from "../../../../protocol/fixtures/run.json";
 import taskFixture from "../../../../protocol/fixtures/task.json";
-import type { GatewayInfo, Run, Task } from "../contracts";
+import runEventFixture from "../../../../protocol/fixtures/run_event.json";
+import startFixture from "../../../../protocol/fixtures/start_run_request.json";
+import type { GatewayInfo, Run, RunEvent, StartRunRequest, Task } from "../contracts";
 import { DEMO_CAPABILITIES, DEMO_GATEWAYS, DEMO_PROJECTS, DEMO_RUNS, DEMO_TASKS } from "../demo/data";
 
 const gateway: GatewayInfo = {
@@ -51,7 +53,17 @@ const run: Run = {
   evidence_refs: ["gw://local/runs/r1/log"],
 };
 
+const start: StartRunRequest = { workspace_id: "ws1", engine: "codex", model: null, prompt: "Resuma a arquitetura" };
+const runEvent: RunEvent = {
+  run_id: "r1",
+  seq: 3,
+  ts: "2026-11-17T12:00:00Z",
+  payload: { type: "usage", usage: { input_tokens: 100, output_tokens: 5, cached_tokens: null, reasoning_tokens: null } },
+};
+
 describe("contratos Rust ↔ TypeScript", () => {
+  it("StartRunRequest bate com o fixture do Rust", () => expect(start).toEqual(startFixture));
+  it("RunEvent bate com o fixture do Rust", () => expect(runEvent).toEqual(runEventFixture));
   it("GatewayInfo bate com o fixture do Rust", () => expect(gateway).toEqual(gatewayFixture));
   it("Task bate com o fixture do Rust", () => expect(task).toEqual(taskFixture));
   it("Run bate com o fixture do Rust", () => expect(run).toEqual(runFixture));

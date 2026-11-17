@@ -19,6 +19,7 @@ serde_json.workspace = true
 one-protocol.workspace = true
 one-store.workspace = true
 one-adapters.workspace = true
+one-exec.workspace = true
 
 [dev-dependencies]
 tauri = { version = "2.12", features = ["test"] }

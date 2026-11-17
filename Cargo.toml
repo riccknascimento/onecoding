@@ -4,6 +4,7 @@ members = [
   "crates/one-protocol",
   "crates/one-store",
   "crates/one-adapters",
+  "crates/one-exec",
   "apps/desktop/src-tauri",
 ]
 
@@ -23,6 +24,7 @@ rusqlite = { version = "0.43", features = ["bundled"] }
 one-protocol = { path = "crates/one-protocol" }
 one-store = { path = "crates/one-store" }
 one-adapters = { path = "crates/one-adapters" }
+one-exec = { path = "crates/one-exec" }
 
 [profile.release]
 lto = "thin"

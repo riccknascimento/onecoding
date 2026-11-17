@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"01a1ea72-b597-7603-9911-a23be2326efd"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Model metadata for `modelo-que-nao-existe` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."}}
+{"type":"turn.started"}
+{"type":"error","message":"The 'modelo-que-nao-existe' model is not supported when using Codex with a ChatGPT account."}
+{"type":"turn.failed","error":{"message":"The 'modelo-que-nao-existe' model is not supported when using Codex with a ChatGPT account."}}

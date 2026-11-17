@@ -157,6 +157,28 @@ CREATE TABLE trusted_executables (
 ) STRICT;
 "#;
 
+/// V3: execuções reais (Fase 2A). Métricas OneUsage por execução e a sessão interna do motor, que fica
+/// SEPARADA do contexto da tarefa (base do futuro OneContext Handoff). Só `ADD COLUMN`: preserva dados.
+const V3: &str = r#"
+ALTER TABLE runs ADD COLUMN engine_session_id TEXT;
+ALTER TABLE runs ADD COLUMN model_reported TEXT;      -- só o que o executor informou
+ALTER TABLE runs ADD COLUMN duration_ms INTEGER;
+ALTER TABLE runs ADD COLUMN input_tokens INTEGER;
+ALTER TABLE runs ADD COLUMN output_tokens INTEGER;
+ALTER TABLE runs ADD COLUMN cached_tokens INTEGER;
+ALTER TABLE runs ADD COLUMN reasoning_tokens INTEGER;
+ALTER TABLE runs ADD COLUMN tool_calls INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE runs ADD COLUMN attempts INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE runs ADD COLUMN error_kind TEXT;
+ALTER TABLE runs ADD COLUMN error_message TEXT;
+ALTER TABLE runs ADD COLUMN final_text TEXT;
+CREATE INDEX runs_task ON runs(task_id);
+CREATE INDEX runs_status ON runs(status);
+
+ALTER TABLE run_events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;
+CREATE UNIQUE INDEX run_events_seq ON run_events(run_id, seq) WHERE seq > 0;
+"#;
+
 pub struct Migration {
     pub sql: &'static str,
     /// Exige `PRAGMA foreign_keys=OFF` durante a migração (reconstrução de tabela).
@@ -171,6 +193,10 @@ pub const MIGRATIONS: &[Migration] = &[
     Migration {
         sql: V2,
         fk_off: true,
+    },
+    Migration {
+        sql: V3,
+        fk_off: false,
     },
 ];
 

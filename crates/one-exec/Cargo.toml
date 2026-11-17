@@ -1,0 +1,13 @@
+[package]
+name = "one-exec"
+description = "Serviço de execução do Gateway local: valida, revalida a identidade, executa o motor, persiste eventos"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+one-protocol.workspace = true
+one-store.workspace = true
+one-adapters.workspace = true

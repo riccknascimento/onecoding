@@ -5,6 +5,7 @@
 //! ou outros dados pessoais). Execução de tarefas só entra na Fase 2.
 
 mod acl;
+pub mod engine;
 pub mod guard;
 mod host;
 mod parse;
@@ -18,7 +19,10 @@ use one_protocol::{
     ModelSource, TrustState, PROTOCOL_VERSION,
 };
 
-pub use host::{Host, SystemHost};
+pub use engine::{
+    CodexAdapter, Confinement, EngineAdapter, EngineParser, ExecRequest, ParsedSummary,
+};
+pub use host::{Host, StreamSpec, SystemHost};
 pub use proc::{Limits, Outcome, RunOutput};
 pub use trust::{Identity, Inspected, TrustStore, TrustedExe};
 
@@ -149,6 +153,23 @@ pub fn detect_all(host: &dyn Host, store: &dyn TrustStore, with_models: bool) ->
             .map(|h| h.join().expect("thread de detecção"))
             .collect()
     })
+}
+
+/// Obtém o executável para EXECUTAR: inspeciona de novo agora (identidade, dono, permissões, ACL) e só
+/// devolve se for idêntico ao aprovado. Chamar imediatamente antes de cada execução.
+pub fn acquire(
+    engine: EngineKind,
+    host: &dyn Host,
+    store: &dyn TrustStore,
+) -> Result<TrustedExe, TrustState> {
+    let Some(insp) = host.inspect(binary_name(engine)) else {
+        return Err(TrustState::Unknown);
+    };
+    let state = trust::evaluate(&insp, store, engine);
+    match (state, insp.identity) {
+        (TrustState::Trusted, Ok(id)) => Ok(TrustedExe::new(id.canonical)),
+        (state, _) => Err(state),
+    }
 }
 
 /// Executável candidato a aprovação (para mostrar ao usuário antes de decidir).

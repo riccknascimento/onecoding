@@ -1,0 +1,11 @@
+{"type": "thread.started", "thread_id": "01a1ea72-6665-76f2-91bd-9907d3957816"}
+{"type": "turn.started"}
+{"type": "item.completed", "item": {"id": "item_0", "type": "agent_message", "text": "Vou listar os arquivos e ler o README.\n"}}
+{"type": "item.started", "item": {"id": "item_1", "type": "command_execution", "command": "/bin/zsh -lc 'cat /Users/user/.codex/skills/using-superpowers/SKILL.md'", "aggregated_output": "", "exit_code": null, "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "/bin/zsh -lc 'cat /Users/user/.codex/skills/using-superpowers/SKILL.md'", "aggregated_output": "(conteúdo omitido na fixture)", "exit_code": 0, "status": "completed"}}
+{"type": "item.started", "item": {"id": "item_2", "type": "command_execution", "command": "/bin/zsh -lc 'ls -la'", "aggregated_output": "", "exit_code": null, "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_2", "type": "command_execution", "command": "/bin/zsh -lc 'ls -la'", "aggregated_output": "total 16\ndrwx------@  4 user  wheel   128 Nov 17 13:58 .\ndrwxrwxrwt  96 root         wheel  3072 Nov 17 13:58 ..\n-rw-r--r--@  1 user  wheel    25 Nov 17 13:58 README.md\n-rw-r--r--@  1 user  wheel    10 Nov 17 13:58 hello.txt\n", "exit_code": 0, "status": "completed"}}
+{"type": "item.started", "item": {"id": "item_3", "type": "command_execution", "command": "/bin/zsh -lc 'cat README.md'", "aggregated_output": "", "exit_code": null, "status": "in_progress"}}
+{"type": "item.completed", "item": {"id": "item_3", "type": "command_execution", "command": "/bin/zsh -lc 'cat README.md'", "aggregated_output": "# Demo\nProjeto de teste.\n", "exit_code": 0, "status": "completed"}}
+{"type": "item.completed", "item": {"id": "item_4", "type": "agent_message", "text": "Arquivos: `README.md` e `hello.txt`.\n\nO README apresenta “Demo” como um projeto de teste."}}
+{"type": "turn.completed", "usage": {"input_tokens": 67838, "cached_input_tokens": 56704, "cache_write_input_tokens": 0, "output_tokens": 137, "reasoning_output_tokens": 0}}

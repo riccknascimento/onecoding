@@ -73,7 +73,7 @@ export function App() {
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot">Fase 1 · fundação local</div>
+        <div className="sidebar-foot">Fase 2A · execução local</div>
       </aside>
       <main className="main">
         <div className="drag" data-tauri-drag-region />

@@ -203,3 +203,16 @@ Rust 1.100.0 · tauri 2.12 (crate) · tauri-build 2.7 · rusqlite 0.43 (bundled,
 
 ### 13.4 Estado
 Fase 1 concluída (tag `fase-1-baseline`): app abre e navega; detecção local somente leitura com aprovação humana; SQLite V2; contratos testados. Próximo: execução real pelo Gateway local (Fase 2). Testes: ver `ROADMAP.md`.
+
+## 14. Execução local (Fase 2A)
+
+```
+UI (React) ──invoke──► comandos Tauri (ACL por comando) ──► ExecService (crate one-exec)
+   ▲ polling get_run                                          │ valida workspace, revalida identidade, trava por workspace
+   │                                                          ▼
+SQLite (runs, run_events, projects) ◄── eventos ◄── EngineParser ◄── stdout ◄── Codex CLI (grupo de processos, read-only)
+```
+- `one-exec`: `ExecService` (start/cancel), `StoreTrust`, `workspace::validate`. Testes com `codex` falso (script real) em `tests/exec.rs` e um teste real sob demanda em `tests/real_codex.rs` (`--ignored`).
+- `one-adapters`: `EngineAdapter`/`EngineParser` (contrato de motor), `CodexAdapter`, `Host::run_stream`, `acquire`.
+- `one-store` V3: métricas por execução, `engine_session_id`, `run_events.seq`.
+- Workspaces autorizados reutilizam `projects` (Gateway `local` criado na abertura do app).

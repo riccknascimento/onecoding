@@ -11,5 +11,7 @@ rust-version.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 one-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]

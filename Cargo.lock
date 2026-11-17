@@ -2220,6 +2220,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "one-exec"
+version = "0.1.0"
+dependencies = [
+ "one-adapters",
+ "one-protocol",
+ "one-store",
+]
+
+[[package]]
 name = "one-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2234,6 +2243,8 @@ version = "0.1.0"
 dependencies = [
  "one-protocol",
  "rusqlite",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -2242,6 +2253,7 @@ name = "oneagent-desktop"
 version = "0.1.0"
 dependencies = [
  "one-adapters",
+ "one-exec",
  "one-protocol",
  "one-store",
  "serde",

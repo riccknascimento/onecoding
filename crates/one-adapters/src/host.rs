@@ -4,7 +4,9 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::proc::{run_bounded, Limits, RunOutput};
+use std::sync::atomic::AtomicBool;
+
+use crate::proc::{run_bounded, run_streaming, Limits, RunOutput};
 use crate::trust::{self, Inspected, TrustedExe};
 
 pub trait Host: Sync {
@@ -12,6 +14,28 @@ pub trait Host: Sync {
     fn inspect(&self, name: &str) -> Option<Inspected>;
     /// Executa um binário já aprovado. Sem shell; grupo de processos próprio; com prazo e limite.
     fn run(&self, exe: &TrustedExe, args: &[&str], limits: Limits) -> RunOutput;
+    /// Execução em streaming (eventos em tempo real), com stdin e diretório de trabalho. A saída
+    /// chega em `on_data`; `cancel` encerra o grupo de processos.
+    fn run_stream(
+        &self,
+        _exe: &TrustedExe,
+        _spec: &StreamSpec,
+        _cancel: Option<&AtomicBool>,
+        _on_data: &mut dyn FnMut(&[u8]),
+    ) -> RunOutput {
+        RunOutput {
+            stdout: String::new(),
+            outcome: crate::proc::Outcome::SpawnFailed,
+        }
+    }
+}
+
+/// Parâmetros de uma execução em streaming. Só dados: não há campo para shell.
+pub struct StreamSpec {
+    pub args: Vec<String>,
+    pub stdin: Vec<u8>,
+    pub cwd: PathBuf,
+    pub limits: Limits,
 }
 
 /// Implementação real. Apps abertos pelo Finder não herdam o PATH do terminal (nvm, ~/.local/bin),
@@ -66,6 +90,25 @@ impl SystemHost {
     }
 }
 
+impl SystemHost {
+    /// Comando sem shell, ambiente por allowlist e PATH com diretórios do sistema primeiro.
+    fn command(&self, exe: &TrustedExe, args: Vec<String>) -> Command {
+        let mut cmd = Command::new(exe.path());
+        cmd.args(args).env_clear();
+        if let Ok(path) = env::join_paths(&self.runtime_dirs) {
+            cmd.env("PATH", path);
+        }
+        // Allowlist de ambiente: o suficiente para a CLI achar a própria configuração/login.
+        for k in ["HOME", "USER", "LANG", "TMPDIR", "XDG_CONFIG_HOME"] {
+            if let Some(v) = env::var_os(k) {
+                cmd.env(k, v);
+            }
+        }
+        cmd.env("NO_COLOR", "1").env("CI", "1");
+        cmd
+    }
+}
+
 impl Default for SystemHost {
     fn default() -> Self {
         Self::new()
@@ -85,19 +128,23 @@ impl Host for SystemHost {
     }
 
     fn run(&self, exe: &TrustedExe, args: &[&str], limits: Limits) -> RunOutput {
-        let mut cmd = Command::new(exe.path());
-        cmd.args(args).env_clear();
-        if let Ok(path) = env::join_paths(&self.runtime_dirs) {
-            cmd.env("PATH", path);
-        }
-        // Allowlist de ambiente: o suficiente para a CLI achar a própria configuração/login.
-        for k in ["HOME", "USER", "LANG", "TMPDIR", "XDG_CONFIG_HOME"] {
-            if let Some(v) = env::var_os(k) {
-                cmd.env(k, v);
-            }
-        }
-        cmd.env("NO_COLOR", "1").env("CI", "1");
-        run_bounded(cmd, limits, None)
+        run_bounded(
+            self.command(exe, args.iter().map(|a| a.to_string()).collect()),
+            limits,
+            None,
+        )
+    }
+
+    fn run_stream(
+        &self,
+        exe: &TrustedExe,
+        spec: &StreamSpec,
+        cancel: Option<&AtomicBool>,
+        on_data: &mut dyn FnMut(&[u8]),
+    ) -> RunOutput {
+        let mut cmd = self.command(exe, spec.args.clone());
+        cmd.current_dir(&spec.cwd);
+        run_streaming(cmd, spec.limits, cancel, Some(&spec.stdin), false, on_data)
     }
 }
 

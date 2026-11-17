@@ -217,6 +217,140 @@ pub struct StoreStatus {
     pub integrity_ok: bool,
 }
 
+// ───────────────────────── Execução (Fase 2A) ─────────────────────────
+
+/// Classe do erro de uma execução. Mensagens ao usuário saem daqui, não de saída bruta das CLIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ErrorKind {
+    InvalidRequest,
+    NotApproved,
+    WorkspaceNotAuthorized,
+    WorkspaceBusy,
+    SpawnFailed,
+    ExecutorFailed,
+    Timeout,
+    Cancelled,
+    OutputLimit,
+    /// O app fechou (ou caiu) durante a execução.
+    Interrupted,
+}
+
+/// Workspace autorizado pelo usuário (diálogo nativo). A webview só vê isto; nunca define caminhos.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct Workspace {
+    pub id: String,
+    pub gateway_id: String,
+    pub label: String,
+    /// Caminho canônico, só para exibição.
+    pub path: String,
+}
+
+/// Pedido de execução vindo da UI. Só identificadores e texto: nada de caminhos, comandos ou flags.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct StartRunRequest {
+    pub workspace_id: String,
+    pub engine: EngineKind,
+    /// Modelo solicitado; `None` = padrão da CLI.
+    pub model: Option<String>,
+    pub prompt: String,
+}
+
+/// Uso informado pelo executor. Campos ausentes continuam `None` (nunca estimados).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct UsageInfo {
+    pub input_tokens: Option<u32>,
+    pub output_tokens: Option<u32>,
+    pub cached_tokens: Option<u32>,
+    pub reasoning_tokens: Option<u32>,
+}
+
+/// Evento normalizado, independente do motor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(export)]
+pub enum EventPayload {
+    Status {
+        status: RunStatus,
+    },
+    /// Mensagem do agente (texto já truncado e sem segredos conhecidos).
+    Message {
+        text: String,
+    },
+    ToolStarted {
+        name: String,
+        summary: String,
+    },
+    ToolFinished {
+        name: String,
+        ok: bool,
+        exit_code: Option<i32>,
+    },
+    Usage {
+        usage: UsageInfo,
+    },
+    Warning {
+        message: String,
+    },
+    Error {
+        kind: ErrorKind,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RunEvent {
+    pub run_id: String,
+    /// Ordem dentro da execução, começando em 1.
+    pub seq: u32,
+    pub ts: String,
+    pub payload: EventPayload,
+}
+
+/// Visão de uma execução para a UI e o histórico (junta tarefa + execução + métricas OneUsage).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RunView {
+    pub run_id: String,
+    pub task_id: String,
+    pub gateway_id: String,
+    pub workspace_id: String,
+    pub workspace_label: String,
+    pub engine: EngineKind,
+    pub model_requested: Option<String>,
+    /// Modelo informado pelo executor; `None` quando o motor não informa.
+    pub model_reported: Option<String>,
+    pub mode: ExecMode,
+    pub prompt: String,
+    pub status: RunStatus,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub duration_ms: Option<u32>,
+    pub exit_code: Option<i32>,
+    /// Sessão interna do motor (ex.: thread do Codex), separada do contexto da tarefa.
+    pub engine_session_id: Option<String>,
+    pub usage: UsageInfo,
+    pub tool_calls: u32,
+    pub attempts: u32,
+    pub error_kind: Option<ErrorKind>,
+    pub error_message: Option<String>,
+    /// Resposta final do agente (truncada).
+    pub final_text: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RunDetail {
+    pub run: RunView,
+    pub events: Vec<RunEvent>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -308,6 +442,40 @@ mod tests {
     #[test]
     fn run_matches_fixture() {
         assert_matches_fixture(&sample_run(), "run.json");
+    }
+
+    #[test]
+    fn start_run_request_matches_fixture() {
+        let v = StartRunRequest {
+            workspace_id: "ws1".into(),
+            engine: EngineKind::Codex,
+            model: None,
+            prompt: "Resuma a arquitetura".into(),
+        };
+        assert_matches_fixture(&v, "start_run_request.json");
+    }
+
+    #[test]
+    fn run_event_matches_fixture_and_tags_are_snake_case() {
+        let v = RunEvent {
+            run_id: "r1".into(),
+            seq: 3,
+            ts: "2026-11-17T12:00:00Z".into(),
+            payload: EventPayload::Usage {
+                usage: UsageInfo {
+                    input_tokens: Some(100),
+                    output_tokens: Some(5),
+                    ..Default::default()
+                },
+            },
+        };
+        assert_matches_fixture(&v, "run_event.json");
+        let t = serde_json::to_value(EventPayload::ToolStarted {
+            name: "shell".into(),
+            summary: "ls".into(),
+        })
+        .unwrap();
+        assert_eq!(t["type"], "tool_started");
     }
 
     #[test]

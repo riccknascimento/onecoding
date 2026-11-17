@@ -102,18 +102,41 @@ mod sys {
 
 /// Executa `cmd` (já com programa, argumentos e ambiente) sob `limits`. Nunca bloqueia além de
 /// `timeout` + pequena folga; ao terminar, nenhum processo do grupo sobrevive.
-pub fn run_bounded(mut cmd: Command, limits: Limits, cancel: Option<&AtomicBool>) -> RunOutput {
+pub fn run_bounded(cmd: Command, limits: Limits, cancel: Option<&AtomicBool>) -> RunOutput {
+    run_streaming(cmd, limits, cancel, None, true, &mut |_| {})
+}
+
+/// Como `run_bounded`, mas entrega a saída em pedaços a `on_data` (para eventos em tempo real),
+/// aceita um `stdin` pequeno (o prompt vai por aqui, nunca em argv) e pode não acumular a saída
+/// (`keep = false`). O limite de saída vale sobre o total recebido.
+pub fn run_streaming(
+    mut cmd: Command,
+    limits: Limits,
+    cancel: Option<&AtomicBool>,
+    stdin: Option<&[u8]>,
+    keep: bool,
+    on_data: &mut dyn FnMut(&[u8]),
+) -> RunOutput {
     let failed = |outcome| RunOutput {
         stdout: String::new(),
         outcome,
     };
-    cmd.stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+    cmd.stdin(if stdin.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
     sys::prepare(&mut cmd);
     let Ok(mut child) = cmd.spawn() else {
         return failed(Outcome::SpawnFailed);
     };
+    if let (Some(data), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        use std::io::Write;
+        // Pequeno (a camada acima limita o prompt) e cabe no buffer do pipe: não bloqueia.
+        let _ = pipe.write_all(data);
+    }
     let mut stdout = child.stdout.take().expect("stdout piped");
     if sys::set_nonblocking(&stdout).is_err() {
         sys::kill_group(&mut child);
@@ -123,6 +146,7 @@ pub fn run_bounded(mut cmd: Command, limits: Limits, cancel: Option<&AtomicBool>
 
     let start = Instant::now();
     let mut buf: Vec<u8> = Vec::new();
+    let mut total = 0usize;
     let mut chunk = [0u8; 8192];
     let mut eof = false;
     let mut exit: Option<std::process::ExitStatus> = None;
@@ -135,8 +159,13 @@ pub fn run_bounded(mut cmd: Command, limits: Limits, cancel: Option<&AtomicBool>
             match stdout.read(&mut chunk) {
                 Ok(0) => eof = true,
                 Ok(n) => {
-                    let room = limits.max_output.saturating_sub(buf.len());
-                    buf.extend_from_slice(&chunk[..n.min(room)]);
+                    let room = limits.max_output.saturating_sub(total);
+                    let take = n.min(room);
+                    on_data(&chunk[..take]);
+                    if keep {
+                        buf.extend_from_slice(&chunk[..take]);
+                    }
+                    total += take;
                     if n > room {
                         forced = Some(Outcome::OutputLimit);
                         break;

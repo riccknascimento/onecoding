@@ -68,3 +68,7 @@ O pacote de contexto não depende do motor. O adaptador só converte o formato d
 ## 9. Fora do escopo do MVP
 
 Embeddings e busca vetorial (só se AC-08 falhar) · sincronização entre Macs · compartilhamento entre Gateways (proibido por política, ver `GATEWAY.md` §1).
+
+## 10. Sessão do motor × contexto da tarefa (Fase 2A)
+
+A tarefa (`tasks`: prompt, workspace, modo) e a conversa (`conversations`) pertencem ao OneAgent. A sessão interna do motor (thread do Codex) fica em `runs.engine_session_id`. Assim, trocar de motor ou retomar depois reaproveita o contexto da tarefa e do OneContext sem depender da sessão do executor. A retomada (`codex exec resume`) e o Handoff ainda não existem.

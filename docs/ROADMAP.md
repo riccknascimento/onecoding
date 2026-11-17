@@ -21,7 +21,17 @@ Ambiente verificado, requisitos analisados, riscos e decisões, arquitetura, `do
 
 **Riscos residuais conhecidos:** `SECURITY.md` §12.
 
-## Fase 2 — Agent Gateway local + adaptadores (≈ 2 semanas)
+## Fase 2A — Primeira execução real pelo Gateway local, só Codex (**implementação técnica concluída na branch `feature/fase-2-local-execution`**; validação manual ponta a ponta **pendente**; sem merge, sem tag)
+App → comando Tauri → `one-exec` → Codex aprovado (identidade revalidada antes do exec) → eventos normalizados no SQLite → Chat com histórico, cancelamento e métricas OneUsage. Somente leitura, uma execução por workspace, workspace por seletor nativo. Detalhes: `SECURITY.md` §13, `DECISIONS.md` D-020 a D-023, `TOKEN-OPTIMIZATION.md` §10.
+Evidência: execução real com o Codex em workspace temporário (sucesso, 9 eventos, uso informado, workspace intacto) e 12 testes de integração do pipeline com um motor falso.
+**Isolamento de leitura (fechamento da 2A):** perfil de permissão oficial do Codex como padrão; diagnóstico, alternativas e recomendação por modo em `ISOLATION.md`.
+**Encerramento (decisões D-025):** leitura confinada ao workspace como padrão e único modo da interface; `TrustedLocalRead` fora da interface; Git/Node indisponíveis no agente por decisão; perfil Beta não é garantia absoluta; sem sandbox de Linux/Windows. Modos futuros: Investigação Restrita (atual), Desenvolvimento Isolado, Administração Autorizada (`ISOLATION.md` §6).
+**Pendente para aprovação definitiva da 2A:** validação manual ponta a ponta na interface (aprovar Codex, autorizar pasta, enviar tarefa, conferir histórico após reinício) e confirmação no banco. A interface **não** está validada sem esse teste.
+**Registro:**  confirmação do teste manual pela interface (o banco do usuário ainda não tem aprovações, workspaces nem execuções).
+**Pendências para a Fase 2B (não iniciada):** adaptadores de Claude Code e Cursor sobre o mesmo `EngineAdapter`/`EngineParser` com fixtures reais e confirmação do modelo reportado; avaliar o equivalente de confinamento de leitura de cada um com o método de canário (nenhum foi medido); decidir D-006 (aprovação durante a execução); rever a janela de troca do executável; manter fixada a versão do Codex e reexecutar `os_level_profile_denies_reads_outside_the_workspace` a cada atualização.
+**Fase 2B (não iniciada):** adaptadores de Claude Code e Cursor sobre o mesmo contrato.
+
+## Fase 2 (visão original) — Agent Gateway local + adaptadores (≈ 2 semanas)
 Descoberta de CLIs/versões/login/modelos; workspaces autorizados; `task.start/event/cancel/result`; adaptadores Codex, Claude, Cursor (somente leitura primeiro); coleta de evidências; testes com CLIs falsas e reais.
 **Aceite:** AC-02, AC-03, AC-04, AC-05, AC-07, AC-13 (parte Gateway).
 
