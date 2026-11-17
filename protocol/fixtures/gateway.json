@@ -1,0 +1,22 @@
+{
+  "id": "local",
+  "name": "Este Mac",
+  "kind": "local",
+  "status": "online",
+  "os": "macos-aarch64",
+  "protocol_version": 1,
+  "engines": [
+    {
+      "engine": "codex",
+      "installed": true,
+      "path": "/usr/local/bin/codex",
+      "version": "0.0.0",
+      "auth": "logged_in",
+      "trust": "trusted",
+      "fingerprint": "ab12",
+      "models": [{ "id": "example-model", "label": null, "source": "catalog", "confirmed": true }],
+      "note": null
+    }
+  ],
+  "demo": false
+}

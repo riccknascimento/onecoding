@@ -1,0 +1,28 @@
+[package]
+name = "oneagent-desktop"
+description = "OneAgent.app — shell Tauri 2 e núcleo do OneHub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+
+[dependencies]
+tauri = { version = "2.12", features = [] }
+# Diálogo nativo de aprovação, chamado só pelo lado Rust (não é concedido à webview nas capabilities).
+tauri-plugin-dialog = "2.8"
+serde.workspace = true
+serde_json.workspace = true
+one-protocol.workspace = true
+one-store.workspace = true
+one-adapters.workspace = true
+
+[dev-dependencies]
+tauri = { version = "2.12", features = ["test"] }
+
+[lib]
+name = "oneagent_desktop"
+crate-type = ["staticlib", "cdylib", "rlib"]

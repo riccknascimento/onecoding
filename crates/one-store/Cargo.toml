@@ -1,0 +1,15 @@
+[package]
+name = "one-store"
+description = "Persistência local do OneAgent (SQLite + FTS5)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+thiserror.workspace = true
+one-protocol.workspace = true
+
+[dev-dependencies]

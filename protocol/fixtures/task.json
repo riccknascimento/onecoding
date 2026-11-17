@@ -1,0 +1,10 @@
+{
+  "id": "t1",
+  "gateway_id": "local",
+  "project_id": "p1",
+  "engine": "claude",
+  "model": null,
+  "mode": "read_only",
+  "prompt": "Resuma a arquitetura",
+  "created_at": "2026-11-17T12:00:00Z"
+}

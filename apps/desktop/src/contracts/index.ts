@@ -1,0 +1,19 @@
+// Tipos gerados pelo ts-rs a partir de crates/one-protocol (não editar os arquivos em ./generated).
+export type { AuthState } from "./generated/AuthState";
+export type { Capability } from "./generated/Capability";
+export type { CapabilityKind } from "./generated/CapabilityKind";
+export type { CapabilityScope } from "./generated/CapabilityScope";
+export type { EngineKind } from "./generated/EngineKind";
+export type { EngineStatus } from "./generated/EngineStatus";
+export type { ExecMode } from "./generated/ExecMode";
+export type { GatewayInfo } from "./generated/GatewayInfo";
+export type { GatewayKind } from "./generated/GatewayKind";
+export type { GatewayStatus } from "./generated/GatewayStatus";
+export type { ModelInfo } from "./generated/ModelInfo";
+export type { ModelSource } from "./generated/ModelSource";
+export type { Project } from "./generated/Project";
+export type { Run } from "./generated/Run";
+export type { RunStatus } from "./generated/RunStatus";
+export type { StoreStatus } from "./generated/StoreStatus";
+export type { Task } from "./generated/Task";
+export type { TrustState } from "./generated/TrustState";

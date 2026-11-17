@@ -1,0 +1,15 @@
+{
+  "name": "oneagent",
+  "private": true,
+  "packageManager": "pnpm@12.21.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @oneagent/desktop tauri dev",
+    "build": "pnpm --filter @oneagent/desktop tauri build",
+    "typecheck": "pnpm --filter @oneagent/desktop typecheck",
+    "test": "pnpm --filter @oneagent/desktop test && cargo test --workspace",
+    "check": "pnpm typecheck && pnpm --filter @oneagent/desktop build:web && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && pnpm test && node scripts/check-contracts.mjs"
+  }
+}
