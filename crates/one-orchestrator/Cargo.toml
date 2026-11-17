@@ -1,0 +1,16 @@
+[package]
+name = "one-orchestrator"
+description = "OneOrchestrator: contrato de provedor, catálogo tipado de ferramentas do OneHub e laço de turno com limites"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+one-protocol.workspace = true
+one-store.workspace = true
+one-adapters.workspace = true
+one-exec.workspace = true

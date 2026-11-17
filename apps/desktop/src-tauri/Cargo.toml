@@ -20,6 +20,7 @@ one-protocol.workspace = true
 one-store.workspace = true
 one-adapters.workspace = true
 one-exec.workspace = true
+one-orchestrator.workspace = true
 
 [dev-dependencies]
 tauri = { version = "2.12", features = ["test"] }

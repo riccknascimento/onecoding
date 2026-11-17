@@ -653,4 +653,115 @@ mod tests {
         assert!(PathBuf::from(format!("{}.pre-v3.bak", p.display())).exists());
         let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
+
+    #[test]
+    fn orchestrator_conversations_messages_events_and_initiator() {
+        use one_protocol::{ChatMode, ChatRole, ExecMode, RunInitiator};
+        let s = Store::open_in_memory().unwrap();
+        s.ensure_local_gateway().unwrap();
+        let ws = s.workspace_add("local", "/tmp/p", "p").unwrap();
+        let conv = s
+            .conversation_create(ChatMode::Orchestrator, "investigar")
+            .unwrap();
+        assert_eq!(
+            s.conversation_mode(&conv).unwrap(),
+            Some(ChatMode::Orchestrator)
+        );
+        s.message_append(&conv, ChatRole::User, "oi").unwrap();
+        s.message_append(&conv, ChatRole::Orchestrator, "olá")
+            .unwrap();
+        let m = s.messages_list(&conv).unwrap();
+        assert_eq!(
+            (m.len(), m[0].role, m[1].role),
+            (2, ChatRole::User, ChatRole::Orchestrator)
+        );
+        s.orch_event_append(&conv, "tool_call", "{}").unwrap();
+        s.orch_event_append(&conv, "tool_result", "{}").unwrap();
+        assert_eq!(
+            s.orch_events(&conv)
+                .unwrap()
+                .iter()
+                .map(|e| e.0.as_str())
+                .collect::<Vec<_>>(),
+            ["tool_call", "tool_result"]
+        );
+        assert!(
+            s.orch_event_append(&conv, "invalido", "{}").is_err(),
+            "CHECK de tipo"
+        );
+
+        let direct = s
+            .run_create(&NewRun {
+                workspace_id: &ws.id,
+                engine: "codex",
+                model: None,
+                mode: ExecMode::ReadOnly,
+                prompt: "d",
+            })
+            .unwrap();
+        let orch = s
+            .run_create_for(
+                &NewRun {
+                    workspace_id: &ws.id,
+                    engine: "codex",
+                    model: None,
+                    mode: ExecMode::ReadOnly,
+                    prompt: "o",
+                },
+                Some(&conv),
+                RunInitiator::Orchestrator,
+            )
+            .unwrap();
+        assert_eq!(
+            s.run_get(&direct).unwrap().unwrap().initiator,
+            RunInitiator::User
+        );
+        assert_eq!(
+            s.run_get(&orch).unwrap().unwrap().initiator,
+            RunInitiator::Orchestrator
+        );
+        assert_eq!(
+            s.run_conversation(&orch).unwrap().as_deref(),
+            Some(conv.as_str())
+        );
+        assert_ne!(
+            s.run_conversation(&direct).unwrap().as_deref(),
+            Some(conv.as_str()),
+            "o direto tem a própria conversa"
+        );
+        assert_eq!(
+            s.conversation_mode(&s.run_conversation(&direct).unwrap().unwrap())
+                .unwrap(),
+            Some(ChatMode::Direct)
+        );
+        assert_eq!(s.orchestrator_run_count(&conv).unwrap(), 1);
+    }
+
+    #[test]
+    fn upgrade_v3_to_v4_keeps_runs_as_direct_user_initiated() {
+        use one_protocol::{ChatMode, RunInitiator};
+        let p = temp_db("v4up");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        {
+            let c = Connection::open(&p).unwrap();
+            c.pragma_update(None, "foreign_keys", "ON").unwrap();
+            migrations::apply_with(&c, &migrations::MIGRATIONS[..3]).unwrap();
+            c.execute_batch(
+                "INSERT INTO gateways(id,name,kind) VALUES('g','G','local');
+                 INSERT INTO projects(id,name,gateway_id,path) VALUES('p','p','g','/p');
+                 INSERT INTO conversations(id,project_id,title) VALUES('c','p','t');
+                 INSERT INTO tasks(id,conversation_id,gateway_id,project_id,engine,mode,prompt) VALUES('t','c','g','p','codex','read_only','x');
+                 INSERT INTO runs(id,task_id,status) VALUES('r','t','succeeded');",
+            ).unwrap();
+        }
+        let s = Store::open(&p).unwrap();
+        assert_eq!(s.schema_version().unwrap(), LATEST_VERSION);
+        assert_eq!(
+            s.run_get("r").unwrap().unwrap().initiator,
+            RunInitiator::User
+        );
+        assert_eq!(s.conversation_mode("c").unwrap(), Some(ChatMode::Direct));
+        assert!(PathBuf::from(format!("{}.pre-v4.bak", p.display())).exists());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
+    }
 }

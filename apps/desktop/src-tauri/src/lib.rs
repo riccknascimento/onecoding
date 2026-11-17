@@ -12,8 +12,10 @@ use std::time::Duration;
 use one_adapters::guard::Throttle;
 use one_adapters::{ApprovalError, SystemHost};
 use one_exec::{ExecLimits, ExecService, StoreTrust, LOCAL_GATEWAY};
+use one_orchestrator::{DisconnectedProvider, OrchestratorProvider};
 use one_protocol::{
-    EngineKind, GatewayInfo, RunDetail, RunView, StartRunRequest, StoreStatus, Workspace,
+    EngineKind, GatewayInfo, ProviderStatus, RunDetail, RunView, StartRunRequest, StoreStatus,
+    Workspace,
 };
 use one_store::Store;
 use tauri::{AppHandle, Manager, State};
@@ -25,6 +27,7 @@ const DETECT_TTL: Duration = Duration::from_secs(3);
 struct Inner {
     store: Arc<Mutex<Store>>,
     exec: Arc<ExecService>,
+    orchestrator_provider: Arc<dyn OrchestratorProvider>,
     detect: Throttle<GatewayInfo>,
     /// Só um diálogo de aprovação por vez (evita enxurrada de janelas por uma webview abusiva).
     approval_open: AtomicBool,
@@ -41,6 +44,11 @@ fn store_status(state: State<'_, AppState>) -> Result<StoreStatus, String> {
         .lock()
         .map_err(|_| "store bloqueado".to_string())?;
     store.status().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn orchestrator_provider_status(state: State<'_, AppState>) -> ProviderStatus {
+    state.0.orchestrator_provider.status()
 }
 
 /// Detecta as CLIs deste Mac (somente leitura; só executa as aprovadas). Serializada e limitada.
@@ -233,6 +241,9 @@ pub fn run() {
             app.manage(AppState(Arc::new(Inner {
                 store,
                 exec,
+                orchestrator_provider: Arc::new(DisconnectedProvider::new(
+                    "ChatGPT Plus não conectado nesta fase.",
+                )),
                 detect: Throttle::new(DETECT_TTL),
                 approval_open: AtomicBool::new(false),
             })));
@@ -240,6 +251,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             store_status,
+            orchestrator_provider_status,
             detect_local_gateway,
             approve_executable,
             list_workspaces,
@@ -276,6 +288,9 @@ mod tests {
         let state = AppState(Arc::new(Inner {
             store,
             exec,
+            orchestrator_provider: Arc::new(DisconnectedProvider::new(
+                "ChatGPT Plus não conectado nesta fase.",
+            )),
             detect: Throttle::new(DETECT_TTL),
             approval_open: AtomicBool::new(false),
         }));
@@ -284,6 +299,7 @@ mod tests {
             .manage(state.clone())
             .invoke_handler(tauri::generate_handler![
                 store_status,
+                orchestrator_provider_status,
                 detect_local_gateway,
                 approve_executable,
                 list_workspaces,
@@ -332,6 +348,14 @@ mod tests {
             st.get("path").is_none(),
             "o caminho do banco não vai para a webview"
         );
+
+        let provider = call(&w, "orchestrator_provider_status", serde_json::json!({}))
+            .expect("estado do provedor é permitido");
+        assert_eq!(provider["state"], "disconnected");
+        assert!(provider["reason"]
+            .as_str()
+            .unwrap()
+            .contains("não conectado"));
 
         let gw = call(
             &w,

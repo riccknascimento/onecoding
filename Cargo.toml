@@ -5,6 +5,7 @@ members = [
   "crates/one-store",
   "crates/one-adapters",
   "crates/one-exec",
+  "crates/one-orchestrator",
   "apps/desktop/src-tauri",
 ]
 
@@ -25,6 +26,7 @@ one-protocol = { path = "crates/one-protocol" }
 one-store = { path = "crates/one-store" }
 one-adapters = { path = "crates/one-adapters" }
 one-exec = { path = "crates/one-exec" }
+one-orchestrator = { path = "crates/one-orchestrator" }
 
 [profile.release]
 lto = "thin"

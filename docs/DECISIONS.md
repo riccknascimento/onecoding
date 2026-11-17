@@ -16,17 +16,17 @@
 | A-07 | Git local, branch `main`, **sem remoto** nesta fase; nenhum commit sem autorização | Fase 1 |
 | A-08 | pnpm com versão fixada (`packageManager`); Rust pelo rustup oficial, sem privilégio administrativo | Fase 1 |
 | A-09 | Sem Docker; sem Xcode completo (só CLT, suficiente para o build atual [V]) | Fase 1 |
-| A-10 | Sem chamadas pagas a LLM; provedor do orquestrador **desacoplado** até haver orçamento e autenticação validada | Fase 1 |
-| A-11 | Sem VPS, sem SSH, sem instalação de Gateway, sem plugins externos, sem alterar projetos externos nesta fase | Fase 1 |
+| A-10 | Sem chamadas pagas a LLM sem autorização; priorizar plan usage oficial se disponível e elegível | Pedido atual |
+| A-11 | Acesso remoto e instalação em VPS exigem aprovação explícita; nenhuma autorização atual para a VPS | Pedido atual |
 
 ## Decisões de arquitetura
 
-### D-001 — Provedor do orquestrador · **Implementada como interface desacoplada; provedor pendente**
-Investigação oficial desta fase [D]:
+### D-001 — Provedor do orquestrador · **Histórica; substituída por D-026**
+Registro da investigação inicial [D], não é mais a decisão vigente. A conclusão e prioridade atuais estão em D-026; reconfirmar disponibilidade e elegibilidade antes da 3B.
 
 | Mecanismo | O que a documentação diz | Veredito |
 |---|---|---|
-| **Sign in with ChatGPT** (token sharing open-source) | Fluxo OAuth authorization code + PKCE, cliente público com registro dinâmico, redirect em loopback `127.0.0.1`. Plus e Pro elegíveis. Consome a cota do plano em `POST /v1/responses` com `stream: true` e `store: false`. Status **preview / limited trial**, para **parceiros comerciais selecionados** e apps open-source; app pago ou hospedado remotamente deve preencher formulário de interesse. Não usar `backend-api`. Hosted MCP, file search, code interpreter e image generation **não** são suportados. | **Não usar agora.** Não há aprovação de parceiro. Não foi possível ler os Termos nem a Central de Ajuda (HTTP 403), então elegibilidade Free/Business/Enterprise e regras de cota não estão confirmadas |
+| **Sign in with ChatGPT / Plan Usage** | Na investigação inicial, fluxo descrito como preview, OAuth authorization code + PKCE, callback loopback e uso da cota em `/v1/responses`. Requisitos e elegibilidade podem ter mudado; verificar D-026 antes de implementar. Não usar `backend-api` nem tokens do Codex. | **Prioridade condicional na 3B**, se oficialmente disponível e elegível; bloqueio deve ser documentado |
 | **Responses API com function calling** (chave de API) | Function tools são o caminho oficial para ferramentas próprias; `strict` recomendado; streaming de argumentos. Chave só no servidor (não embutir no app). Limites por organização/projeto. | **Candidata para o MVP**, pelo caminho desacoplado. Exige orçamento aprovado |
 | **ChatKit** | Exige servidor próprio (`ChatKitServer`, pacote `openai-chatkit`) ou fluxo hospedado (`/v1/chatkit/sessions`). Sem menção a Tauri ou webview. Taxa própria só para armazenamento de upload; o restante é token. | **Não recomendado**: UI própria é requisito e o ganho é pequeno |
 | **Agent Builder** | Descontinuado; **encerramento em 30/11/2026** [D]. ChatKit e Agents SDK continuam. | Não usar. Não confundir com ChatKit |
@@ -35,9 +35,9 @@ Investigação oficial desta fase [D]:
 
 Preços de referência da API [D, tabela convertida automaticamente; conferir antes de decidir]: gpt-6.1-sol US$ 2,00 / 10,00 por 1M tokens (entrada/saída); gpt-6.1-terra US$ 1,00 / 5,00; gpt-6-luna US$ 0,10 / 0,50; gpt-6-astra US$ 10,00 / 50,00. Modelo recomendado pela própria OpenAI para trabalho complexo: Sol 6.1.
 
-Implementação desta fase: trait `OrchestratorProvider` no OneHub, sem implementação real. A UI mostra "desativado". Nenhuma chamada é feita.
+**Registro histórico:** a investigação e a decisão originais foram substituídas por D-026. A implementação local não commitada da base 3A agora contém `OrchestratorProvider`, `DisconnectedProvider` e `ScriptedProvider`; isso não habilita chamadas reais. O estado detalhado está em `ORCHESTRATION-PLAN.md`.
 
-**Pergunta ao usuário:** qual provedor autorizar primeiro (API com chave e teto mensal, ou aguardar aprovação de parceiro para SIWC)? Qual teto mensal?
+Não há autorização para chamadas pagas de API. Qualquer alternativa paga depende de aprovação e orçamento separados.
 
 ### D-002 — Shell do app: Tauri 2 · **Aceita e implementada**
 Versões fixadas: `tauri` 2.12.x, `@tauri-apps/api` 2.12.5, `@tauri-apps/cli` 2.12.5 [V; crates.io e npm]. Tauri 3 aparece no crates.io só como alpha; **não usar**.
@@ -114,9 +114,37 @@ Sem permissão de eventos na webview e sem canal extra: os eventos já estão no
 ### D-025 — Decisões de encerramento da Fase 2A · **Aceita**
 (1) Perfil restrito de leitura como padrão. (2) `TrustedLocalRead` não exposto na interface. (3) Nenhuma permissão ampliada para consertar Git/Node. (4) Limitação de Git/Node registrada. (5) Três modos futuros: Investigação Restrita (atual), Desenvolvimento Isolado e Administração Autorizada (`ISOLATION.md` §6). (6) O perfil Beta não é garantia absoluta de isolamento do processo inteiro. (7) Sem sandbox de Linux ou Windows nesta fase.
 
+### D-026 — Provedor do orquestrador · **Prioridade: ChatGPT Plan Usage, se disponível e elegível**
+Na 3B, priorizar a integração oficial Sign in with ChatGPT/Plan Usage. **Não usar API paga sem autorização explícita; não assumir elegibilidade.** Se o fluxo oficial bloquear o usuário ou o projeto, registrar a evidência e apresentar alternativas antes de decidir. Não alterar a visibilidade do repositório para contornar elegibilidade. A investigação documental foi feita em 2026-11-17; reconfirmar disponibilidade, termos e elegibilidade antes da implementação, pois o recurso é preview:
+- **Autorização:** `GET https://auth.openai.com/api/accounts/authorize` no navegador do sistema, com `client_id=dynamic_agent_client` (1º registro) e `agent_name_hint`, `ext_agent_host_id`, `response_type=code`, `redirect_uri=http://127.0.0.1:<porta>/auth/callback` (não `localhost`; listener antes do navegador), `scope="openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"`, `resource=https://api.openai.com/v1`, `state`, `nonce`, PKCE `S256`. O callback devolve o `client_id` emitido (`oaiapp_…`), que deve ser **salvo antes** da troca e reutilizado.
+- **Troca e refresh:** `POST https://auth.openai.com/api/accounts/oauth/token` (form, sem secret). Access ~1 h, refresh ~30 dias com rotação (guardar o novo; serializar refreshes). **Revogação:** `revocation_endpoint` do discovery (`/.well-known/openid-configuration`; URL literal não documentada), 200 vazio = sucesso.
+- **Validação do ID token:** assinatura via JWKS (`/.well-known/jwks.json`), `iss=https://auth.openai.com`, `aud` = client_id emitido, `exp`, `nonce`.
+- **Login × plan usage:** "A valid ID token alone does not authorize ChatGPT plan usage": exigir `chatgpt.tokens.use.direct` nos escopos retornados. Sem ele, manter o login e deixar o plan usage desligado, **sem trocar de cobrança em silêncio**.
+- **Modelos:** `GET https://api.openai.com/v1/models`, filtrar `visibility == "list"`, usar `slug`.
+- **Chamada:** `POST https://api.openai.com/v1/responses` com `store:false` e `stream:true`, histórico completo em `input`, `instructions` (sem item `system`), **sem** `previous_response_id`, `max_output_tokens`, `temperature` e demais campos listados como não suportados; function tools suportadas; MCP hospedado, file search e code interpreter não. Sucesso só após `response.completed`; `response.failed` pode chegar com o stream aberto.
+- **Erros:** `subscription_sharing_user_not_eligible` (403, não repetir), `…usage_limit_exceeded` (429, pausar), `…usage_unavailable`/`…user_unavailable` (503, backoff), `…unsupported_capability` (400, remover o recurso), `…route_not_supported` (403), `…invalid_user` (401), `chatpass_v2_*` (403).
+- **Credenciais:** a documentação só exige arquivo `0600`; o OneAgent usará o **Keychain** (mais forte) e nunca SQLite, log ou webview. Guardar `id_token` para `id_token_hint` na reautorização. Um perfil por conta/workspace.
+- **Não documentado** (confirmar na 3B): formato do `function_call` no stream (guia de function calling), URL literal de revogação, status HTTP de access token expirado, schema completo de `/v1/models`. **Não lidos:** políticas gerais da OpenAI e o DevKit.
+**Chamada real somente com autorização expressa do usuário.** A implementação de OAuth também exige autorização para iniciar a etapa 3B.
+
+### D-027 — Arquitetura e dois modos · **Aceita**
+Tauri 2 + React + TS, OneHub em Rust, Gateways independentes, SQLite, OneContext persistente, `OrchestratorProvider` desacoplado, ferramentas tipadas autorizadas pelo Hub. **Orquestrador:** ChatGPT → OneHub → Gateway → CLI. **Direto:** usuário → OneHub → Gateway → CLI (a Fase 2A). O Codex nunca é apresentado como ChatGPT Orquestrador.
+
+### D-028 — Segurança do orquestrador · **Aceita**
+Sem shell irrestrito, caminhos arbitrários nem credenciais SSH para o orquestrador. O Hub valida todas as ações; aprovações sensíveis são do usuário e verificadas pelo backend.
+
+### D-029 — Git · **Aceita**
+Preservar a baseline `fase-1-baseline` e o commit da 2A (`41c0ab3`); sem merge automático, sem remoto, sem publicar código.
+
+### D-030 — SSH · **Aceita (planejamento; sem autorização de acesso)**
+Provisionamento remoto é prioridade, via o alias `flowsharp` já configurado no Mac e pelo serviço controlado do Hub (`ORCHESTRATION-PLAN.md` §7). A autorização atual **não** permite acessar a VPS, instalar nem modificar serviços.
+
+### D-031 — Ordem de implementação · **Aceita**
+3A (OneOrchestrator) → 3B (ChatGPT Plus) → 2B (provisionamento SSH, antes de Claude/Cursor) → Claude e Cursor → OneContext Handoff → OneProject Discovery → OneSkills Registry → OneUsage → OneAgent Factory (os últimos só planejados). "2B" passa a significar provisionamento remoto.
+
 ## Riscos e incompatibilidades (atualizados)
 
-1. Assinatura ChatGPT ≠ integração embutível; SIWC em preview e por convite (D-001).
+1. Plan Usage/Sign in with ChatGPT está sujeito a mudanças, elegibilidade e termos que precisam ser confirmados antes da 3B (D-026).
 2. Termos das assinaturas em automação não confirmados para produto de terceiros (D-008).
 3. Aprovação mid-run desigual entre motores (D-006).
 4. Cursor `-f`/`--yolo` libera tudo; isolamento por worktree obrigatório.
@@ -127,7 +155,7 @@ Sem permissão de eventos na webview e sem canal extra: os eventos já estão no
 9. Webview com conteúdo não confiável: CSP estrita aplicada (`SECURITY.md` §11).
 10. Agent Builder encerra em 30/11/2026; não depender dele.
 11. Fontes de terceiros continuam sendo confirmadas nas páginas oficiais antes de virarem requisito.
-12. Páginas oficiais bloqueadas (HTTP 403) para os Termos da OpenAI e a Central de Ajuda: elegibilidade de planos não confirmada.
+12. Páginas oficiais de Termos e Central de Ajuda da OpenAI retornaram 403 na pesquisa de 2026-11-17; confirmar diretamente na 3B.
 
 ## Fontes consultadas (2026-11-17)
 

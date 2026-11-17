@@ -2,6 +2,7 @@
 import type { EngineKind } from "./EngineKind";
 import type { ErrorKind } from "./ErrorKind";
 import type { ExecMode } from "./ExecMode";
+import type { RunInitiator } from "./RunInitiator";
 import type { RunStatus } from "./RunStatus";
 import type { UsageInfo } from "./UsageInfo";
 
@@ -12,12 +13,4 @@ export type RunView = { run_id: string, task_id: string, gateway_id: string, wor
 /**
  * Modelo informado pelo executor; `None` quando o motor não informa.
  */
-model_reported: string | null, mode: ExecMode, prompt: string, status: RunStatus, created_at: string, started_at: string | null, finished_at: string | null, duration_ms: number | null, exit_code: number | null, 
-/**
- * Sessão interna do motor (ex.: thread do Codex), separada do contexto da tarefa.
- */
-engine_session_id: string | null, usage: UsageInfo, tool_calls: number, attempts: number, error_kind: ErrorKind | null, error_message: string | null, 
-/**
- * Resposta final do agente (truncada).
- */
-final_text: string | null, };
+model_reported: string | null, mode: ExecMode, prompt: string, status: RunStatus, created_at: string, started_at: string | null, finished_at: string | null, duration_ms: number | null, exit_code: number | null, engine_session_id: string | null, usage: UsageInfo, tool_calls: number, attempts: number, initiator: RunInitiator, error_kind: ErrorKind | null, error_message: string | null, final_text: string | null, };

@@ -333,14 +333,15 @@ pub struct RunView {
     pub finished_at: Option<String>,
     pub duration_ms: Option<u32>,
     pub exit_code: Option<i32>,
-    /// Sessão interna do motor (ex.: thread do Codex), separada do contexto da tarefa.
+    // Sessão interna do motor (ex.: thread do Codex), separada do contexto da tarefa.
     pub engine_session_id: Option<String>,
     pub usage: UsageInfo,
     pub tool_calls: u32,
     pub attempts: u32,
+    pub initiator: RunInitiator,
     pub error_kind: Option<ErrorKind>,
     pub error_message: Option<String>,
-    /// Resposta final do agente (truncada).
+    // Resposta final do agente (truncada).
     pub final_text: Option<String>,
 }
 
@@ -349,6 +350,77 @@ pub struct RunView {
 pub struct RunDetail {
     pub run: RunView,
     pub events: Vec<RunEvent>,
+}
+
+// ───────────────────────── Orquestração (Etapa 3A) ─────────────────────────
+
+/// Modo da conversa. O Modo direto NUNCA é apresentado como ChatGPT Orquestrador.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ChatMode {
+    Orchestrator,
+    Direct,
+}
+
+/// Quem iniciou a tarefa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RunInitiator {
+    User,
+    Orchestrator,
+}
+
+/// Estado REAL do provedor do orquestrador. A UI só mostra "conectado" quando isto disser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "state", rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProviderStatus {
+    Disconnected {
+        reason: String,
+    },
+    Simulated {
+        provider: String,
+        label: String,
+    },
+    Connected {
+        provider: String,
+        label: String,
+        models: Vec<String>,
+    },
+    Error {
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ChatRole {
+    User,
+    Orchestrator,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub text: String,
+    pub ts: String,
+}
+
+/// Resultado de um envio ao orquestrador.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OrchestratorReply {
+    pub conversation_id: String,
+    // Resposta final; `None` quando o turno parou antes (limite ou erro do provedor).
+    pub text: Option<String>,
+    pub steps: u32,
+    pub tool_calls: u32,
+    // Motivo da parada antecipada, em texto para o usuário.
+    pub stopped: Option<String>,
 }
 
 #[cfg(test)]
@@ -476,6 +548,20 @@ mod tests {
         })
         .unwrap();
         assert_eq!(t["type"], "tool_started");
+    }
+
+    #[test]
+    fn provider_status_is_tagged_and_modes_are_snake_case() {
+        let v = serde_json::to_value(ProviderStatus::Disconnected { reason: "x".into() }).unwrap();
+        assert_eq!(v["state"], "disconnected");
+        assert_eq!(
+            serde_json::to_string(&ChatMode::Orchestrator).unwrap(),
+            "\"orchestrator\""
+        );
+        assert_eq!(
+            serde_json::to_string(&RunInitiator::Orchestrator).unwrap(),
+            "\"orchestrator\""
+        );
     }
 
     #[test]

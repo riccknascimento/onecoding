@@ -7,6 +7,7 @@
   ],
   "permissions": [
     "allow-store-status",
+    "allow-orchestrator-provider-status",
     "allow-detect-local-gateway",
     "allow-approve-executable",
     "allow-list-workspaces",

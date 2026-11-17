@@ -19,7 +19,7 @@ describe("OneAgent shell", () => {
     for (const label of SECTIONS) {
       expect(nav).toHaveTextContent(label);
     }
-    expect(screen.getByRole("heading", { level: 1, name: "Chat / Orquestrador" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Chat" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Chat \/ Orquestrador/ })).toHaveAttribute("aria-current", "page");
   });
 
@@ -28,7 +28,7 @@ describe("OneAgent shell", () => {
     render(<App />);
     for (const label of SECTIONS) {
       await user.click(screen.getByRole("button", { name: new RegExp(label.replace(/[/&]/g, "\\$&")) }));
-      expect(screen.getByRole("heading", { level: 1, name: label })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: label === "Chat / Orquestrador" ? "Chat" : label })).toBeInTheDocument();
     }
   });
 

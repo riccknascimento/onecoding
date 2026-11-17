@@ -23,7 +23,8 @@ use one_adapters::{
     StreamSpec, TrustStore,
 };
 use one_protocol::{
-    EngineKind, ErrorKind, EventPayload, ExecMode, RunStatus, StartRunRequest, TrustState,
+    EngineKind, ErrorKind, EventPayload, ExecMode, RunInitiator, RunStatus, StartRunRequest,
+    TrustState,
 };
 use one_store::{FinishInfo, NewRun, Store};
 
@@ -62,6 +63,36 @@ impl TrustStore for StoreTrust {
         lock(&self.0)
             .trusted_put(engine_key(engine), fingerprint, canonical_path)
             .map_err(|e| e.to_string())
+    }
+}
+
+/// De onde vem o pedido de execução.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunOrigin {
+    /// Modo direto: o usuário pediu pela interface.
+    Direct,
+    /// Modo Orquestrador: o OneOrchestrator pediu, dentro desta conversa.
+    Orchestrator { conversation_id: String },
+}
+
+impl RunOrigin {
+    fn actor(&self) -> &'static str {
+        match self {
+            RunOrigin::Direct => "user",
+            RunOrigin::Orchestrator { .. } => "orchestrator",
+        }
+    }
+    fn initiator(&self) -> RunInitiator {
+        match self {
+            RunOrigin::Direct => RunInitiator::User,
+            RunOrigin::Orchestrator { .. } => RunInitiator::Orchestrator,
+        }
+    }
+    fn conversation_id(&self) -> Option<&str> {
+        match self {
+            RunOrigin::Direct => None,
+            RunOrigin::Orchestrator { conversation_id } => Some(conversation_id),
+        }
     }
 }
 
@@ -132,14 +163,26 @@ impl ExecService {
             .map(|a| a.as_ref())
     }
 
-    fn audit(&self, action: &str, subject: &str, outcome: &str) {
-        let _ = lock(&self.store).audit_append("user", action, subject, outcome);
+    fn audit(&self, actor: &str, action: &str, subject: &str, outcome: &str) {
+        let _ = lock(&self.store).audit_append(actor, action, subject, outcome);
     }
 
-    /// Valida, reserva o workspace, cria a execução e a inicia em segundo plano. Devolve o `run_id`.
+    /// Valida, reserva o workspace, cria a execução e a inicia em segundo plano (Modo direto).
     pub fn start(self: &Arc<Self>, req: &StartRunRequest) -> Result<String, StartError> {
+        self.start_for(req, &RunOrigin::Direct)
+    }
+
+    /// Igual a `start`, com a origem: no Modo Orquestrador a tarefa entra na conversa do orquestrador e
+    /// o iniciador é registrado como `orchestrator`. As MESMAS validações valem nos dois modos.
+    pub fn start_for(
+        self: &Arc<Self>,
+        req: &StartRunRequest,
+        origin: &RunOrigin,
+    ) -> Result<String, StartError> {
+        let actor = origin.actor();
         let blocked = |e: StartError| {
             self.audit(
+                actor,
                 "run_blocked",
                 &format!("{}:{:?}", req.workspace_id, e.kind),
                 "blocked",
@@ -224,13 +267,17 @@ impl ExecService {
                 )));
             }
             let id = lock(&self.store)
-                .run_create(&NewRun {
-                    workspace_id: &ws.id,
-                    engine: engine_key(req.engine),
-                    model: req.model.as_deref(),
-                    mode: ExecMode::ReadOnly,
-                    prompt,
-                })
+                .run_create_for(
+                    &NewRun {
+                        workspace_id: &ws.id,
+                        engine: engine_key(req.engine),
+                        model: req.model.as_deref(),
+                        mode: ExecMode::ReadOnly,
+                        prompt,
+                    },
+                    origin.conversation_id(),
+                    origin.initiator(),
+                )
                 .map_err(|e| err(ErrorKind::InvalidRequest, e.to_string()))?;
             active.insert(ws.id.clone(), id.clone());
             id
@@ -238,6 +285,7 @@ impl ExecService {
         let cancel = Arc::new(AtomicBool::new(false));
         lock(&self.cancels).insert(run_id.clone(), cancel.clone());
         self.audit(
+            actor,
             "run_started",
             &format!("{run_id}:{}", engine_key(req.engine)),
             "started",
@@ -305,12 +353,16 @@ impl ExecService {
         lock(&self.cancels).remove(run_id);
     }
 
-    /// Pede o cancelamento. `false` se a execução não está ativa.
+    /// Pede o cancelamento (usuário). `false` se a execução não está ativa.
     pub fn cancel(&self, run_id: &str) -> bool {
+        self.cancel_as(run_id, "user")
+    }
+
+    pub fn cancel_as(&self, run_id: &str, actor: &str) -> bool {
         match lock(&self.cancels).get(run_id) {
             Some(flag) => {
                 flag.store(true, Ordering::SeqCst);
-                self.audit("run_cancel", run_id, "requested");
+                self.audit(actor, "run_cancel", run_id, "requested");
                 true
             }
             None => false,

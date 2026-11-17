@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { LocalGatewayState } from "../App";
-import type { EngineStatus, GatewayInfo, RunDetail, RunEvent, RunView, Workspace } from "../contracts";
+import type { EngineStatus, GatewayInfo, ProviderStatus, RunDetail, RunEvent, RunView, Workspace } from "../contracts";
 import { ChatPage } from "../pages/ChatPage";
 
 vi.mock("../api", () => ({
@@ -12,6 +12,7 @@ vi.mock("../api", () => ({
   cancelRun: vi.fn(),
   listRuns: vi.fn(),
   getRun: vi.fn(),
+  getOrchestratorStatus: vi.fn(),
 }));
 import * as api from "../api";
 
@@ -36,7 +37,7 @@ const runView = (over: Partial<RunView> = {}): RunView => ({
   status: "running", created_at: "2026-11-17T12:00:00Z", started_at: null, finished_at: null, duration_ms: null,
   exit_code: null, engine_session_id: null,
   usage: { input_tokens: null, output_tokens: null, cached_tokens: null, reasoning_tokens: null },
-  tool_calls: 0, attempts: 1, error_kind: null, error_message: null, final_text: null, ...over,
+  tool_calls: 0, attempts: 1, initiator: "user", error_kind: null, error_message: null, final_text: null, ...over,
 });
 
 const ev = (seq: number, payload: RunEvent["payload"]): RunEvent => ({ run_id: "rn1", seq, ts: "t", payload });
@@ -47,14 +48,69 @@ beforeEach(() => {
   vi.mocked(api.startRun).mockReset();
   vi.mocked(api.getRun).mockReset();
   vi.mocked(api.cancelRun).mockReset();
+  vi.mocked(api.getOrchestratorStatus).mockResolvedValue({
+    state: "disconnected",
+    reason: "ChatGPT Plus não conectado nesta fase.",
+  });
 });
 
 describe("Chat com execução real", () => {
-  it("Codex não aprovado: execução desabilitada e motivo exibido, sem chamar o backend", async () => {
+  it("Modo Direto sem Codex aprovado: execução desabilitada, sem conversa fictícia", async () => {
     render(<ChatPage local={local("unknown")} />);
+    expect(screen.getByRole("combobox", { name: "Modo" })).toHaveValue("direct");
+    expect(screen.getByText("Modo Direto · ChatGPT não participa desta execução.")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
     expect(screen.getByText(/Aprove o Codex CLI em Agent Gateways/)).toBeInTheDocument();
-    expect(screen.getByText("DEMO")).toBeInTheDocument();
+    expect(screen.queryByText("Orquestrador", { selector: ".msg-role" })).not.toBeInTheDocument();
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("Modo Orquestrador desconectado não encaminha mensagens ao Codex", async () => {
+    const user = userEvent.setup();
+    render(<ChatPage local={local("trusted")} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Modo" }), "orchestrator");
+    expect(screen.getByText("Provedor configurado: nenhum · ChatGPT Plan Usage previsto na Fase 3B")).toBeInTheDocument();
+    expect(await screen.findByText(/Estado: desconectado/)).toBeInTheDocument();
+    expect(screen.getByText("ChatGPT não conectado. Conecte uma conta na Fase 3B para usar o Modo Orquestrador.")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("provedor simulado é identificado como teste e nunca como ChatGPT conectado", async () => {
+    const simulated: ProviderStatus = { state: "simulated", provider: "scripted", label: "somente testes" };
+    vi.mocked(api.getOrchestratorStatus).mockResolvedValue(simulated);
+    const user = userEvent.setup();
+    render(<ChatPage local={local("trusted")} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Modo" }), "orchestrator");
+    expect(await screen.findByText("Estado: simulado (somente testes)")).toBeInTheDocument();
+    expect(screen.queryByText("Estado: conectado")).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("falha ao consultar estado do provedor aparece como indisponível", async () => {
+    vi.mocked(api.getOrchestratorStatus).mockRejectedValue(new Error("status offline"));
+    const user = userEvent.setup();
+    render(<ChatPage local={local("trusted")} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Modo" }), "orchestrator");
+    expect(await screen.findByText("Estado: indisponível · status offline")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
+  });
+
+  it("mostra conexão real sem habilitar envio ainda não implementado", async () => {
+    vi.mocked(api.getOrchestratorStatus).mockResolvedValue({
+      state: "connected",
+      provider: "chatgpt_plan",
+      label: "ChatGPT Plus",
+      models: [],
+    });
+    const user = userEvent.setup();
+    render(<ChatPage local={local("trusted")} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Modo" }), "orchestrator");
+    expect(await screen.findByText("Estado: conectado · ChatGPT Plus")).toBeInTheDocument();
+    expect(screen.getByText("Provedor conectado; o envio do Modo Orquestrador ainda não está disponível nesta fase.")).toBeInTheDocument();
+    expect(screen.getByText("Provedor configurado: ChatGPT Plus")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
     expect(api.startRun).not.toHaveBeenCalled();
   });
 

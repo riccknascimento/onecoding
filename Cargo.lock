@@ -2229,6 +2229,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "one-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "one-adapters",
+ "one-exec",
+ "one-protocol",
+ "one-store",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "one-protocol"
 version = "0.1.0"
 dependencies = [
@@ -2254,6 +2266,7 @@ version = "0.1.0"
 dependencies = [
  "one-adapters",
  "one-exec",
+ "one-orchestrator",
  "one-protocol",
  "one-store",
  "serde",

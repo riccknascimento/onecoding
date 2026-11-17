@@ -1,6 +1,6 @@
 # OneAgent — PRD (Fase 0)
 
-> Status: Fase 0 e Fase 1 concluídas; Fase 2 (execução real pelo Gateway local) é a próxima · Data: 2026-11-17 · Autor: Claude Code (desenvolvedor principal) · Revisor: ChatGPT (arquiteto)
+> Status: Fases 0, 1, 2A e base 3A implementadas neste working tree, ainda sem commit. Sequência atual em `ROADMAP.md` e `ORCHESTRATION-PLAN.md` · Data: 2026-11-17
 > Mudanças da Fase 1 no fim deste documento (§12).
 > Convenção: **[V]** = verificado nesta máquina · **[D]** = visto em documentação/pesquisa, não testado · **[?]** = não verificado.
 
@@ -27,7 +27,7 @@ Princípio: **o OneOrchestrator decide e delega dentro dos limites autorizados; 
 
 ## 4. Usuários e cenários
 
-Usuário único inicial (o dono do Mac). Cenário-guia (do pedido):
+Usuário inicial (o dono do Mac), com múltiplos clientes isolados por Gateway. Cenário-guia (do pedido):
 1. Abre OneAgent → escolhe Gateway "Apliflow" → escolhe Claude Code + modelo.
 2. Pede: "Localize o SystemFlow, leia a documentação, analise a arquitetura e se contextualize."
 3. O orquestrador monta a tarefa → Gateway executa → resultado volta ao chat → OneContext registra.
@@ -46,8 +46,8 @@ Na fase inicial o Gateway é **local no Mac**; a VPS Apliflow só depois do MVP 
 - Configurações → Orquestrador: ver/editar prompt, restaurar padrão, histórico de versões, instruções por projeto.
 - Logs estruturados e trilha de auditoria.
 
-### 5.2 Fora do MVP
-Gateway remoto/VPS · Linux/Windows · execução paralela de várias CLIs · embeddings/busca vetorial · MCP próprio exposto a terceiros · multiusuário · distribuição assinada/notarizada · auto-update.
+### 5.2 Fora do MVP local
+Gateway remoto/VPS (etapa posterior) · execução paralela de várias CLIs · embeddings/busca vetorial · MCP próprio exposto a terceiros · multiusuário · distribuição assinada/notarizada · auto-update.
 
 ## 6. Requisitos funcionais (resumo)
 
@@ -116,3 +116,8 @@ Incorporado ao escopo, com detalhe nos documentos indicados:
 - **Provisionamento remoto (futuro, não implementado):** `OneAgent → Adicionar Gateway → SSH → instalar OneNode → registrar identidade → verificar conexão`, com verificação de host, release assinada e idempotência. → `GATEWAY.md` §6.
 
 Critérios novos para o MVP: **AC-15** — dados de um Gateway não aparecem no Mac além de metadados e referências (teste de inspeção do banco). **AC-16** — instalação de capacidade sem aprovação é bloqueada (teste E2E, Fase 3).
+
+## 13. Revisão de 2026-11-17 (orquestração)
+
+O produto oferece dois fluxos distintos: **Modo Orquestrador** (ChatGPT → OneHub → Gateway → CLI) e **Modo direto** (usuário → OneHub → Gateway → CLI, Fase 2A). A 3B priorizará ChatGPT Plan Usage/Sign in with ChatGPT se oficialmente disponível e elegível; não haverá API paga sem autorização explícita. Provisionamento SSH via alias `flowsharp` é a etapa remota seguinte, sujeito à aprovação de acesso e de cada alteração. Ordem e requisitos transversais em `ORCHESTRATION-PLAN.md`.
+Critérios novos: **AC-17** o indicador de provedor reflete o estado real e a UI nunca simula resposta do orquestrador; **AC-18** o orquestrador só alcança ferramentas tipadas, sem caminho livre; **AC-19** o Modo direto nunca aparece como ChatGPT.

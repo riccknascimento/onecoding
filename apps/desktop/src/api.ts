@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EngineKind, GatewayInfo, RunDetail, RunView, StartRunRequest, StoreStatus, Workspace } from "./contracts";
+import type { EngineKind, GatewayInfo, ProviderStatus, RunDetail, RunView, StartRunRequest, StoreStatus, Workspace } from "./contracts";
 
 /** `true` dentro do app Tauri; `false` no navegador (dev) e nos testes. */
 export function inTauri(): boolean {
@@ -15,6 +15,11 @@ export async function detectLocalGateway(withModels = true): Promise<GatewayInfo
 export async function storeStatus(): Promise<StoreStatus | null> {
   if (!inTauri()) return null;
   return invoke<StoreStatus>("store_status");
+}
+
+export async function getOrchestratorStatus(): Promise<ProviderStatus> {
+  if (!inTauri()) return { state: "disconnected", reason: "Provedor disponível somente no app OneAgent." };
+  return invoke<ProviderStatus>("orchestrator_provider_status");
 }
 
 /** Pede a aprovação de uma CLI. A confirmação real é um diálogo nativo aberto pelo app (Rust). */

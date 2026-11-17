@@ -70,11 +70,3 @@ export const DEMO_CAPABILITIES: Capability[] = [
   { id: "demo-c3", kind: "mcp", name: "supabase", scope: "gateway", engine: "codex", version: null, source: "config do Gateway", demo: true },
   { id: "demo-c4", kind: "command", name: "/plano", scope: "cli", engine: "claude", version: null, source: "~/.claude", demo: true },
 ];
-
-export const DEMO_CHAT: { role: "user" | "orchestrator"; text: string }[] = [
-  { role: "user", text: "Vamos trabalhar no SystemFlow. Localize o projeto, leia a documentação e se contextualize." },
-  {
-    role: "orchestrator",
-    text: "Mensagem de exemplo. O orquestrador ainda não está conectado: não há provedor autenticado nem orçamento de API aprovado nesta fase.",
-  },
-];

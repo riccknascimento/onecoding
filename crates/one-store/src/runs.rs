@@ -2,7 +2,8 @@
 //! Tudo que vem de fora (UI, executor) entra por parâmetros SQL: nenhuma concatenação de texto.
 
 use one_protocol::{
-    ErrorKind, EventPayload, ExecMode, RunEvent, RunStatus, RunView, UsageInfo, Workspace,
+    ChatMessage, ChatMode, ChatRole, ErrorKind, EventPayload, ExecMode, RunEvent, RunInitiator,
+    RunStatus, RunView, UsageInfo, Workspace,
 };
 use rusqlite::{params, OptionalExtension, Row};
 use serde::de::DeserializeOwned;
@@ -51,7 +52,7 @@ fn parse_enum<T: DeserializeOwned>(s: &str) -> rusqlite::Result<T> {
 const RUN_VIEW_SQL: &str = "SELECT r.id, r.task_id, t.gateway_id, t.project_id, p.name, t.engine, t.model, r.model_reported,
     t.mode, t.prompt, r.status, t.created_at, r.started_at, r.finished_at, r.duration_ms, r.exit_code,
     r.engine_session_id, r.input_tokens, r.output_tokens, r.cached_tokens, r.reasoning_tokens,
-    r.tool_calls, r.attempts, r.error_kind, r.error_message, r.final_text
+    r.tool_calls, r.attempts, r.error_kind, r.error_message, r.final_text, t.initiator
   FROM runs r JOIN tasks t ON t.id = r.task_id JOIN projects p ON p.id = t.project_id";
 
 fn run_view(r: &Row<'_>) -> rusqlite::Result<RunView> {
@@ -89,10 +90,103 @@ fn run_view(r: &Row<'_>) -> rusqlite::Result<RunView> {
         error_kind: opt_enum(23)?,
         error_message: r.get(24)?,
         final_text: r.get(25)?,
+        initiator: parse_enum(&r.get::<_, String>(26)?)?,
     })
 }
 
 impl Store {
+    // ───────── conversas do orquestrador ─────────
+
+    pub fn conversation_create(&self, mode: ChatMode, title: &str) -> Result<String> {
+        let t: String = title.chars().take(60).collect();
+        self.conn.execute(
+            "INSERT INTO conversations(id, title, mode) VALUES ('cv_' || lower(hex(randomblob(8))), ?1, ?2)",
+            params![t, enum_str(&mode)],
+        )?;
+        Ok(self.conn.query_row(
+            "SELECT id FROM conversations WHERE rowid = last_insert_rowid()",
+            [],
+            |r| r.get(0),
+        )?)
+    }
+
+    pub fn conversation_mode(&self, id: &str) -> Result<Option<ChatMode>> {
+        let m: Option<String> = self
+            .conn
+            .query_row("SELECT mode FROM conversations WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .optional()?;
+        Ok(m.map(|s| parse_enum(&s)).transpose()?)
+    }
+
+    pub fn message_append(&self, conversation_id: &str, role: ChatRole, text: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO messages(id, conversation_id, role, body) VALUES ('ms_' || lower(hex(randomblob(8))), ?1, ?2, ?3)",
+            params![conversation_id, enum_str(&role), text],
+        )?;
+        Ok(())
+    }
+
+    pub fn messages_list(&self, conversation_id: &str) -> Result<Vec<ChatMessage>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT role, body, created_at FROM messages WHERE conversation_id = ?1 AND role IN ('user','orchestrator') ORDER BY rowid")?;
+        let rows = st.query_map([conversation_id], |r| {
+            Ok(ChatMessage {
+                role: parse_enum(&r.get::<_, String>(0)?)?,
+                text: r.get(1)?,
+                ts: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Registra uma chamada de ferramenta, resultado, limite ou erro do provedor (texto já truncado e redigido).
+    pub fn orch_event_append(
+        &self,
+        conversation_id: &str,
+        kind: &str,
+        payload: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO orchestrator_events(conversation_id, seq, kind, payload)
+             VALUES (?1, (SELECT coalesce(max(seq),0)+1 FROM orchestrator_events WHERE conversation_id = ?1), ?2, ?3)",
+            params![conversation_id, kind, payload],
+        )?;
+        Ok(())
+    }
+
+    pub fn orch_events(&self, conversation_id: &str) -> Result<Vec<(String, String)>> {
+        let mut st = self.conn.prepare(
+            "SELECT kind, payload FROM orchestrator_events WHERE conversation_id = ?1 ORDER BY seq",
+        )?;
+        let rows = st.query_map([conversation_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Conversa à qual a execução pertence (para checar que o orquestrador só vê as suas).
+    pub fn run_conversation(&self, run_id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT t.conversation_id FROM runs r JOIN tasks t ON t.id = r.task_id WHERE r.id = ?1",
+                [run_id],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
+    /// Quantas execuções o orquestrador já iniciou nesta conversa.
+    pub fn orchestrator_run_count(&self, conversation_id: &str) -> Result<u32> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM tasks WHERE conversation_id = ?1 AND initiator = 'orchestrator'",
+            [conversation_id],
+            |r| r.get(0),
+        )?)
+    }
+
     /// Trilha de auditoria (append-only). `subject` não deve conter segredos.
     pub fn audit_append(
         &self,
@@ -176,26 +270,42 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
-    /// Cria conversa, tarefa e execução (`queued`) numa transação. Devolve `run_id`.
+    /// Cria conversa, tarefa e execução (`queued`) do Modo direto (iniciador: usuário).
     pub fn run_create(&self, n: &NewRun<'_>) -> Result<String> {
+        self.run_create_for(n, None, RunInitiator::User)
+    }
+
+    /// Cria tarefa e execução (`queued`) numa transação. Com `conversation_id`, a tarefa entra nessa
+    /// conversa (ex.: a do orquestrador); sem ele, cria uma conversa do Modo direto.
+    pub fn run_create_for(
+        &self,
+        n: &NewRun<'_>,
+        conversation_id: Option<&str>,
+        initiator: RunInitiator,
+    ) -> Result<String> {
         let ws = self
             .workspace_get(n.workspace_id)?
             .ok_or_else(|| StoreError::Integrity("workspace inexistente".into()))?;
         let title: String = n.prompt.chars().take(60).collect();
         let tx = self.conn.unchecked_transaction()?;
+        let conv: String = match conversation_id {
+            Some(c) => c.to_string(),
+            None => {
+                tx.execute(
+                    "INSERT INTO conversations(id, project_id, title) VALUES ('cv_' || lower(hex(randomblob(8))), ?1, ?2)",
+                    params![ws.id, title],
+                )?;
+                tx.query_row(
+                    "SELECT id FROM conversations WHERE rowid = last_insert_rowid()",
+                    [],
+                    |r| r.get(0),
+                )?
+            }
+        };
         tx.execute(
-            "INSERT INTO conversations(id, project_id, title) VALUES ('cv_' || lower(hex(randomblob(8))), ?1, ?2)",
-            params![ws.id, title],
-        )?;
-        let conv: String = tx.query_row(
-            "SELECT id FROM conversations WHERE rowid = last_insert_rowid()",
-            [],
-            |r| r.get(0),
-        )?;
-        tx.execute(
-            "INSERT INTO tasks(id, conversation_id, gateway_id, project_id, engine, model, mode, prompt)
-             VALUES ('tk_' || lower(hex(randomblob(8))), ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![conv, ws.gateway_id, ws.id, n.engine, n.model, enum_str(&n.mode), n.prompt],
+            "INSERT INTO tasks(id, conversation_id, gateway_id, project_id, engine, model, mode, prompt, initiator)
+             VALUES ('tk_' || lower(hex(randomblob(8))), ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![conv, ws.gateway_id, ws.id, n.engine, n.model, enum_str(&n.mode), n.prompt, enum_str(&initiator)],
         )?;
         let task: String = tx.query_row(
             "SELECT id FROM tasks WHERE rowid = last_insert_rowid()",

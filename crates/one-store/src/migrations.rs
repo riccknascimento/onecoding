@@ -179,6 +179,24 @@ ALTER TABLE run_events ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX run_events_seq ON run_events(run_id, seq) WHERE seq > 0;
 "#;
 
+/// V4: orquestração (Etapa 3A). Modo da conversa, quem iniciou a tarefa e o registro das chamadas de
+/// ferramenta do orquestrador. Só `ADD COLUMN` e tabela nova: preserva dados (conversas e tarefas
+/// existentes são do Modo direto, iniciadas pelo usuário).
+const V4: &str = r#"
+ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'direct' CHECK (mode IN ('direct','orchestrator'));
+ALTER TABLE tasks ADD COLUMN initiator TEXT NOT NULL DEFAULT 'user' CHECK (initiator IN ('user','orchestrator'));
+
+CREATE TABLE orchestrator_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  kind TEXT NOT NULL CHECK (kind IN ('tool_call','tool_result','limit','provider_error')),
+  payload TEXT NOT NULL,          -- JSON já truncado e com segredos redigidos
+  UNIQUE (conversation_id, seq)
+) STRICT;
+"#;
+
 pub struct Migration {
     pub sql: &'static str,
     /// Exige `PRAGMA foreign_keys=OFF` durante a migração (reconstrução de tabela).
@@ -196,6 +214,10 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         sql: V3,
+        fk_off: false,
+    },
+    Migration {
+        sql: V4,
         fk_off: false,
     },
 ];

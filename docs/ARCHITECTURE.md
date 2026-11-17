@@ -1,6 +1,6 @@
 # OneAgent — Arquitetura técnica (proposta, Fase 0)
 
-> Status: Fase 1 — arquitetura aprovada com ajustes; estrutura e detecção local implementadas (ver §13) · 2026-11-17 · Legenda: **[V]** verificado nesta máquina · **[D]** documentação/pesquisa · **[?]** não verificado.
+> Status: arquitetura aprovada; Fases 1, 2A e base 3A implementadas neste working tree, ainda sem commit (ver §15) · 2026-11-17 · Legenda: **[V]** verificado nesta máquina · **[D]** documentação/pesquisa · **[?]** não verificado.
 > Decisões e pendências: `DECISIONS.md`. Gateway e multi-cliente: `GATEWAY.md`. Catálogo de capacidades: `CAPABILITIES.md`.
 
 ## 1. Ambiente de desenvolvimento verificado
@@ -76,13 +76,13 @@ Fato central: **a assinatura ChatGPT (Plus/Pro) não permite embutir a interface
 
 | Opção | Como funciona | Custo / limite | Encaixe |
 |---|---|---|---|
-| **A. OpenAI API (Responses API) com function tools** | Hub chama a API; ferramentas = operações do OneHub; aprovação via `require_approval`/loop próprio | Cobrança por token, chave de API, independente da assinatura | **Recomendada para o MVP**: previsível, oficial, controle total de prompt/ferramentas |
-| **B. "Sign in with ChatGPT"** | OAuth PKCE com cliente público; usa a cota do plano (Plus/Pro) via Responses API | Preview e por convite: parceiros comerciais selecionados e open-source. App pago ou hospedado precisa de formulário. Sem hosted MCP nem file search | **Não agora.** Sem aprovação de parceiro. Revisar se houver convite (`DECISIONS.md` D-001) |
+| **A. OpenAI API (Responses API) com function tools** | Hub chama a API; ferramentas = operações do OneHub; aprovação via política local | Cobrança por token e chave de API, independente da assinatura | Alternativa futura somente com autorização explícita e orçamento |
+| **B. Sign in with ChatGPT / Plan Usage** | OAuth PKCE; disponibilidade, elegibilidade e limites dependem do fluxo oficial vigente | Preview; revisar documentação e validar elegibilidade antes de implementar. Sem reutilizar tokens internos do Codex | Prioridade para 3B, condicionada à elegibilidade (`DECISIONS.md` D-026) |
 | **C. ChatKit** | Widget de chat que exige backend próprio (`ChatKitServer`) ou fluxo hospedado | Taxa própria só para upload de arquivos; o resto é token. **Agent Builder encerra em 30/11/2026** (ChatKit continua) | Não recomendado: UI própria é requisito e o ganho é pequeno |
 | **D. MCP** | OneHub exposto como servidor MCP para ChatGPT/apps consumirem | Exige endpoint HTTPS acessível ao cliente; modo desenvolvedor/planos conforme OpenAI | Não serve para app local; reavaliar para uso futuro via ChatGPT web |
 | **E. Reutilizar token OAuth do Codex em proxy** | Terceiros fazem isso hoje | Sem garantia contratual; risco de bloqueio | **Rejeitada** (viola o princípio "não assumir capacidades") |
 
-Arquitetura: interface `OrchestratorProvider` (stream de eventos, chamada de ferramentas, contagem de tokens). Provedores: `openai-responses` (MVP), `chatgpt-oauth` (se B aprovada). Trocar provedor não afeta Hub/Gateway.
+Arquitetura: interface `OrchestratorProvider`, com política e ferramentas no OneHub Rust. A base 3A está presente em alterações locais não commitadas; o provedor disponível no app é desconectado e o roteirizado serve apenas a testes. Plan usage é a prioridade da 3B, se elegível. API paga depende de autorização e orçamento; trocar provedor não deve alterar Hub/Gateway.
 
 ## 5. Protocolo OneNode (Hub ↔ Gateway)
 
@@ -216,3 +216,7 @@ SQLite (runs, run_events, projects) ◄── eventos ◄── EngineParser ◄
 - `one-adapters`: `EngineAdapter`/`EngineParser` (contrato de motor), `CodexAdapter`, `Host::run_stream`, `acquire`.
 - `one-store` V3: métricas por execução, `engine_session_id`, `run_events.seq`.
 - Workspaces autorizados reutilizam `projects` (Gateway `local` criado na abertura do app).
+
+## 15. Camada de orquestração (Etapa 3A; implementada localmente, sem commit)
+
+Crate `one-orchestrator`: contrato `OrchestratorProvider` (status, turno com eventos), `DisconnectedProvider` (registrado no app), `ScriptedProvider` (**somente testes**), catálogo tipado e laço com limites. O `ExecService` registra a origem `orchestrator` ou `user`; a execução continua somente leitura. Migração V4 adiciona modo da conversa, iniciador da tarefa e eventos do orquestrador. A UI separa os modos e informa o estado real sem apresentar o simulador como ChatGPT conectado. `pnpm check` e `pnpm build` passaram. Plano e critérios: `ORCHESTRATION-PLAN.md`.

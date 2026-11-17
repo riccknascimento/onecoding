@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { authorizeWorkspace, cancelRun, getRun, listRuns, listWorkspaces, startRun } from "../api";
+import { authorizeWorkspace, cancelRun, getOrchestratorStatus, getRun, listRuns, listWorkspaces, startRun } from "../api";
 import type { LocalGatewayState } from "../App";
-import type { EngineKind, RunEvent, RunView, Workspace } from "../contracts";
-import { DEMO_CHAT, DEMO_GATEWAYS } from "../demo/data";
-import { DemoBadge, PageHeader } from "./common";
+import type { ChatMode, EngineKind, ProviderStatus, RunEvent, RunView, Workspace } from "../contracts";
+import { DEMO_GATEWAYS } from "../demo/data";
+import { PageHeader } from "./common";
 import { RunMetrics, RunTimeline, StatusBadge } from "./RunTimeline";
 
 const ENGINE_LABEL: Record<EngineKind, string> = { codex: "Codex CLI", claude: "Claude Code", cursor: "Cursor CLI" };
@@ -15,6 +15,14 @@ function errText(e: unknown): string {
 }
 
 export function ChatPage({ local }: { local: LocalGatewayState }) {
+  const [mode, setMode] = useState<ChatMode>("direct");
+  const [providerStatus, setProviderStatus] = useState<ProviderStatus | null>(null);
+  useEffect(() => {
+    getOrchestratorStatus()
+      .then(setProviderStatus)
+      .catch((e: unknown) => setProviderStatus({ state: "error", message: errText(e) }));
+  }, []);
+
   const gateways = useMemo(
     () => [...(local.phase === "ready" ? [local.gateway] : []), ...DEMO_GATEWAYS],
     [local],
@@ -54,13 +62,17 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
   }, []);
 
   useEffect(() => {
-    if (!realCapable) return;
+    if (gateway?.id !== "local") return;
     listWorkspaces()
       .then((w) => {
         setWorkspaces(w);
         setWorkspaceId((cur) => cur || w[0]?.id || "");
       })
       .catch((e: unknown) => setError(errText(e)));
+  }, [gateway?.id]);
+
+  useEffect(() => {
+    if (!realCapable) return;
     refreshRuns();
   }, [realCapable, refreshRuns]);
 
@@ -127,10 +139,44 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
       .catch((e: unknown) => setError(errText(e)));
   };
 
+  const providerStateText = providerStatus?.state === "connected"
+    ? `Estado: conectado · ${providerStatus.label}`
+    : providerStatus?.state === "simulated"
+      ? "Estado: simulado (somente testes)"
+      : providerStatus?.state === "error"
+        ? `Estado: indisponível · ${providerStatus.message}`
+        : providerStatus?.state === "disconnected"
+          ? `Estado: desconectado · ${providerStatus.reason}`
+          : "Estado: consultando o provedor…";
+
+  const orchestratorNotice = providerStatus?.state === "simulated"
+    ? "O provedor simulado existe somente nos testes e não produz respostas nesta interface."
+    : providerStatus?.state === "connected"
+      ? "Provedor conectado; o envio do Modo Orquestrador ainda não está disponível nesta fase."
+      : providerStatus?.state === "error"
+        ? "Não foi possível confirmar a conexão. O Modo Orquestrador permanece indisponível."
+        : providerStatus?.state === "disconnected"
+          ? "ChatGPT não conectado. Conecte uma conta na Fase 3B para usar o Modo Orquestrador."
+          : "Consultando o estado do provedor…";
+
+  const configuredProvider = providerStatus?.state === "connected"
+    ? `Provedor configurado: ${providerStatus.label}`
+    : providerStatus?.state === "simulated"
+      ? `Provedor configurado: simulado · ${providerStatus.label}`
+      : "Provedor configurado: nenhum · ChatGPT Plan Usage previsto na Fase 3B";
+
   return (
     <section className="chat">
-      <PageHeader title="Chat / Orquestrador" subtitle="Converse com o orquestrador e delegue tarefas aos motores." />
+      <PageHeader title="Chat" subtitle="Escolha entre delegar ao orquestrador ou executar diretamente no Gateway." />
       <div className="selectors">
+        <label>
+          Modo
+          <select value={mode} onChange={(e) => setMode(e.target.value as ChatMode)} aria-label="Modo">
+            <option value="direct">Direto</option>
+            <option value="orchestrator">Orquestrador</option>
+          </select>
+        </label>
+        {mode === "direct" && <>
         <label>
           Gateway
           <select value={gatewayId} onChange={(e) => setChosenGateway(e.target.value)} aria-label="Gateway">
@@ -163,11 +209,11 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
             ))}
           </select>
         </label>
-        {realCapable && (
+        {gateway?.id === "local" && (
           <label>
             Workspace (somente leitura)
             <span className="row">
-              <select value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} aria-label="Workspace">
+              <select value={workspaceId} onChange={(e) => setWorkspaceId(e.target.value)} aria-label="Workspace" disabled={!realCapable}>
                 {workspaces.length === 0 && <option value="">Nenhuma pasta autorizada</option>}
                 {workspaces.map((w) => (
                   <option key={w.id} value={w.id} title={w.path}>
@@ -175,28 +221,42 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
                   </option>
                 ))}
               </select>
-              <button type="button" className="btn" onClick={authorize}>
+              <button type="button" className="btn" onClick={authorize} disabled={!realCapable}>
                 Autorizar pasta…
               </button>
             </span>
           </label>
         )}
+        {gateway?.id !== "local" && (
+          <label>
+            Workspace
+            <span className="muted">Indisponível até selecionar “Este Mac”.</span>
+          </label>
+        )}
+        </>}
       </div>
 
+      {mode === "orchestrator" ? (
+        <>
+          <div className="notice" role="status">{configuredProvider}</div>
+          <div className="notice">{providerStateText}</div>
+          <div className="chat-body">
+            <div className="thread" role="log" aria-label="Conversa do Modo Orquestrador">
+              <div className="notice">{orchestratorNotice}</div>
+            </div>
+          </div>
+          <form className="composer" onSubmit={(e) => e.preventDefault()}>
+            <textarea value="" placeholder="Indisponível enquanto não houver provedor conectado." rows={2} aria-label="Mensagem" disabled />
+            <button type="button" disabled aria-label="Enviar">Enviar</button>
+          </form>
+        </>
+      ) : (
+      <>
+      <div className="notice">Modo Direto · ChatGPT não participa desta execução.</div>
       <div className="chat-body">
-        <div className="thread" role="log" aria-label={realCapable ? "Conversa" : "Conversa de demonstração"}>
+        <div className="thread" role="log" aria-label="Conversa do Modo Direto">
           {!realCapable && (
-            <>
-              <div className="notice">
-                <DemoBadge /> Conversa de exemplo. {whyNot}
-              </div>
-              {DEMO_CHAT.map((m, i) => (
-                <div key={i} className={`msg ${m.role}`}>
-                  <div className="msg-role">{m.role === "user" ? "Você" : "Orquestrador"}</div>
-                  <p>{m.text}</p>
-                </div>
-              ))}
-            </>
+            <div className="notice">Execução Direta indisponível. {whyNot}</div>
           )}
           {realCapable && !run && !selected && (
             <div className="notice">
@@ -282,6 +342,8 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
           Enviar
         </button>
       </form>
+      </>
+      )}
     </section>
   );
 }
