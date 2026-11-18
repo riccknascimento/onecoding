@@ -2,7 +2,8 @@
 //! Tudo que vem de fora (UI, executor) entra por parâmetros SQL: nenhuma concatenação de texto.
 
 use one_protocol::{
-    ChatMessage, ChatMode, ChatRole, ErrorKind, EventPayload, ExecMode, RunEvent, RunInitiator,
+    ChatContext, ChatConversation, ChatMessage, ChatMessageState, ChatMode, ChatRole, ErrorKind,
+    EventPayload, ExecMode, ExecutorPreference, PersistedChatMessage, RunEvent, RunInitiator,
     RunStatus, RunView, UsageInfo, Workspace,
 };
 use rusqlite::{params, OptionalExtension, Row};
@@ -96,6 +97,129 @@ fn run_view(r: &Row<'_>) -> rusqlite::Result<RunView> {
 
 impl Store {
     // ───────── conversas do orquestrador ─────────
+
+    pub fn chat_conversations_list(&self) -> Result<Vec<ChatConversation>> {
+        let mut st = self.conn.prepare("SELECT id,title,provider,model,state,updated_at,ctx_gateway_id,ctx_workspace_id,ctx_executor_engine,ctx_executor_model,ctx_orchestrator_model FROM conversations WHERE mode='orchestrator' ORDER BY updated_at DESC LIMIT 100")?;
+        let rows = st.query_map([], |r| {
+            let engine: Option<String> = r.get(8)?;
+            Ok(ChatConversation {
+                id: r.get(0)?,
+                title: r.get(1)?,
+                provider: r.get(2)?,
+                model: r.get(3)?,
+                state: r.get(4)?,
+                updated_at: r.get(5)?,
+                context: ChatContext {
+                    gateway_id: r.get(6)?,
+                    workspace_id: r.get(7)?,
+                    // valor desconhecido (banco de outra versão) vira "sem escolha", nunca erro
+                    executor_engine: engine.and_then(|e| parse_enum::<ExecutorPreference>(&e).ok()),
+                    executor_model: r.get(9)?,
+                    orchestrator_model: r.get(10)?,
+                },
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Guarda o contexto escolhido numa conversa do orquestrador. Não altera `updated_at` (não reordena
+    /// o histórico) e não concede nada: é só preferência. `false` = conversa inexistente ou do Modo direto.
+    pub fn chat_conversation_context_set(&self, id: &str, ctx: &ChatContext) -> Result<bool> {
+        let engine = ctx.executor_engine.as_ref().map(enum_str);
+        let n = self.conn.execute(
+            "UPDATE conversations SET ctx_gateway_id=?2,ctx_workspace_id=?3,ctx_executor_engine=?4,ctx_executor_model=?5,ctx_orchestrator_model=?6 WHERE id=?1 AND mode='orchestrator'",
+            params![id, ctx.gateway_id, ctx.workspace_id, engine, ctx.executor_model, ctx.orchestrator_model],
+        )?;
+        Ok(n == 1)
+    }
+
+    pub fn chat_conversation_create(&self) -> Result<String> {
+        self.conversation_create(ChatMode::Orchestrator, "Nova conversa")
+    }
+
+    pub fn chat_message_insert(
+        &self,
+        conversation_id: &str,
+        role: ChatRole,
+        text: &str,
+        model: Option<&str>,
+        state: ChatMessageState,
+    ) -> Result<String> {
+        let role = enum_str(&role);
+        let state = enum_str(&state);
+        self.conn.execute("INSERT INTO messages(id,conversation_id,role,body,provider,model,state) SELECT 'ms_'||lower(hex(randomblob(8))),id,?2,?3,'chatgpt_plan',?4,?5 FROM conversations WHERE id=?1 AND mode='orchestrator'", params![conversation_id,role,text,model,state])?;
+        if self.conn.changes() == 0 {
+            return Err(StoreError::Integrity(
+                "conversa do orquestrador inexistente".into(),
+            ));
+        }
+        let id = self.conn.query_row(
+            "SELECT id FROM messages WHERE rowid=last_insert_rowid()",
+            [],
+            |r| r.get(0),
+        )?;
+        self.conn.execute("UPDATE conversations SET provider='chatgpt_plan',model=coalesce(?2,model),state=CASE WHEN ?3='streaming' THEN 'generating' ELSE state END,updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),title=CASE WHEN ?4='user' AND title='Nova conversa' THEN substr(?5,1,60) ELSE title END WHERE id=?1", params![conversation_id,model,state,role,text])?;
+        Ok(id)
+    }
+
+    pub fn chat_message_delta(&self, message_id: &str, delta: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET body=body||?2 WHERE id=?1 AND state='streaming'",
+            params![message_id, delta],
+        )?;
+        Ok(())
+    }
+
+    pub fn chat_message_finish(
+        &self,
+        conversation_id: &str,
+        message_id: &str,
+        state: ChatMessageState,
+        model: Option<&str>,
+        usage: &UsageInfo,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let state = enum_str(&state);
+        self.conn.execute("UPDATE messages SET state=?3,model=coalesce(?4,model),error_message=?5,input_tokens=?6,output_tokens=?7,cached_tokens=?8,reasoning_tokens=?9 WHERE id=?1 AND conversation_id=?2",params![message_id,conversation_id,state,model,error,usage.input_tokens,usage.output_tokens,usage.cached_tokens,usage.reasoning_tokens])?;
+        self.conn.execute("UPDATE conversations SET state=CASE WHEN ?2='error' THEN 'error' ELSE 'idle' END,model=coalesce(?3,model),updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?1",params![conversation_id,state,model])?;
+        Ok(())
+    }
+
+    pub fn chat_messages_list(&self, conversation_id: &str) -> Result<Vec<PersistedChatMessage>> {
+        let mut st=self.conn.prepare("SELECT id,conversation_id,role,body,provider,model,state,error_message,input_tokens,output_tokens,cached_tokens,reasoning_tokens,created_at FROM messages WHERE conversation_id=?1 AND role IN ('user','orchestrator') ORDER BY rowid")?;
+        let rows = st.query_map([conversation_id], |r| {
+            Ok(PersistedChatMessage {
+                id: r.get(0)?,
+                conversation_id: r.get(1)?,
+                role: parse_enum(&r.get::<_, String>(2)?)?,
+                text: r.get(3)?,
+                provider: r.get(4)?,
+                model: r.get(5)?,
+                state: parse_enum(&r.get::<_, String>(6)?)?,
+                error_message: r.get(7)?,
+                usage: UsageInfo {
+                    input_tokens: r.get(8)?,
+                    output_tokens: r.get(9)?,
+                    cached_tokens: r.get(10)?,
+                    reasoning_tokens: r.get(11)?,
+                },
+                ts: r.get(12)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn chat_generation_reconcile(&self) -> Result<()> {
+        self.conn.execute(
+            "UPDATE messages SET state='interrupted' WHERE state='streaming'",
+            [],
+        )?;
+        self.conn.execute(
+            "UPDATE conversations SET state='idle' WHERE state='generating'",
+            [],
+        )?;
+        Ok(())
+    }
 
     pub fn conversation_create(&self, mode: ChatMode, title: &str) -> Result<String> {
         let t: String = title.chars().take(60).collect();

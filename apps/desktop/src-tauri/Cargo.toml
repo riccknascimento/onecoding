@@ -21,6 +21,7 @@ one-store.workspace = true
 one-adapters.workspace = true
 one-exec.workspace = true
 one-orchestrator.workspace = true
+one-chatgpt.workspace = true
 
 [dev-dependencies]
 tauri = { version = "2.12", features = ["test"] }

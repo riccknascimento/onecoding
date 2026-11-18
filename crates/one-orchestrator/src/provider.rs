@@ -51,6 +51,7 @@ pub enum TurnEvent {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TurnOutput {
     pub text: String,
+    pub model: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub usage: UsageInfo,
 }

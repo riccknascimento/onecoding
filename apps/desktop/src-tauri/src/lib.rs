@@ -5,17 +5,22 @@
 //! explícita em `capabilities/default.json`. A decisão de aprovar um executável NÃO é da webview:
 //! ela só pede, e a confirmação é um diálogo nativo aberto aqui, em Rust.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use one_adapters::guard::Throttle;
 use one_adapters::{ApprovalError, SystemHost};
+use one_chatgpt::ChatGptProvider;
 use one_exec::{ExecLimits, ExecService, StoreTrust, LOCAL_GATEWAY};
-use one_orchestrator::{DisconnectedProvider, OrchestratorProvider};
+use one_orchestrator::{
+    ChatItem, DisconnectedProvider, OrchestratorProvider, TurnEvent, TurnRequest,
+};
 use one_protocol::{
-    EngineKind, GatewayInfo, ProviderStatus, RunDetail, RunView, StartRunRequest, StoreStatus,
-    Workspace,
+    ChatContext, ChatConversation, ChatMessageState, ChatRole, EngineKind, GatewayInfo,
+    PersistedChatMessage, ProviderStatus, RunDetail, RunView, StartRunRequest, StoreStatus,
+    UsageInfo, Workspace,
 };
 use one_store::Store;
 use tauri::{AppHandle, Manager, State};
@@ -28,9 +33,11 @@ struct Inner {
     store: Arc<Mutex<Store>>,
     exec: Arc<ExecService>,
     orchestrator_provider: Arc<dyn OrchestratorProvider>,
+    chatgpt_provider: Option<Arc<ChatGptProvider>>,
     detect: Throttle<GatewayInfo>,
     /// Só um diálogo de aprovação por vez (evita enxurrada de janelas por uma webview abusiva).
     approval_open: AtomicBool,
+    active_chats: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 #[derive(Clone)]
@@ -49,6 +56,207 @@ fn store_status(state: State<'_, AppState>) -> Result<StoreStatus, String> {
 #[tauri::command]
 fn orchestrator_provider_status(state: State<'_, AppState>) -> ProviderStatus {
     state.0.orchestrator_provider.status()
+}
+
+#[tauri::command]
+async fn connect_chatgpt_plan(state: State<'_, AppState>) -> Result<ProviderStatus, String> {
+    let provider = state
+        .0
+        .chatgpt_provider
+        .clone()
+        .ok_or("Integração ChatGPT indisponível neste host.")?;
+    tauri::async_runtime::spawn_blocking(move || provider.connect().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(state.0.orchestrator_provider.status())
+}
+
+#[tauri::command]
+async fn refresh_chatgpt_models(state: State<'_, AppState>) -> Result<ProviderStatus, String> {
+    let provider = state
+        .0
+        .chatgpt_provider
+        .clone()
+        .ok_or("Integração ChatGPT indisponível neste host.")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        provider.refresh_models().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(state.0.orchestrator_provider.status())
+}
+
+#[tauri::command]
+async fn disconnect_chatgpt_plan(state: State<'_, AppState>) -> Result<(), String> {
+    let provider = state
+        .0
+        .chatgpt_provider
+        .clone()
+        .ok_or("Integração ChatGPT indisponível neste host.")?;
+    tauri::async_runtime::spawn_blocking(move || provider.disconnect().map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn chat_conversations_list(state: State<'_, AppState>) -> Result<Vec<ChatConversation>, String> {
+    state
+        .0
+        .store
+        .lock()
+        .map_err(|_| "store bloqueado".to_string())?
+        .chat_conversations_list()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn chat_messages_list(
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<Vec<PersistedChatMessage>, String> {
+    let store = state
+        .0
+        .store
+        .lock()
+        .map_err(|_| "store bloqueado".to_string())?;
+    if store
+        .conversation_mode(&conversation_id)
+        .map_err(|e| e.to_string())?
+        != Some(one_protocol::ChatMode::Orchestrator)
+    {
+        return Err("conversa do orquestrador inexistente".into());
+    }
+    store
+        .chat_messages_list(&conversation_id)
+        .map_err(|e| e.to_string())
+}
+
+/// Guarda o contexto (Gateway, projeto, executor, modelos) de uma conversa. Só preferência: não
+/// concede permissão de execução e não entra na requisição ao provedor.
+#[tauri::command]
+fn chat_conversation_set_context(
+    state: State<'_, AppState>,
+    conversation_id: String,
+    context: ChatContext,
+) -> Result<(), String> {
+    context.validate()?;
+    let store = state
+        .0
+        .store
+        .lock()
+        .map_err(|_| "store bloqueado".to_string())?;
+    if store
+        .chat_conversation_context_set(&conversation_id, &context)
+        .map_err(|e| e.to_string())?
+    {
+        Ok(())
+    } else {
+        Err("conversa do orquestrador inexistente".into())
+    }
+}
+
+#[tauri::command]
+async fn chatgpt_send_message(
+    state: State<'_, AppState>,
+    conversation_id: Option<String>,
+    text: String,
+    model: String,
+    context: Option<ChatContext>,
+) -> Result<String, String> {
+    if text.trim().is_empty() || text.len() > 16 * 1024 {
+        return Err("A mensagem deve conter até 16 KB.".into());
+    }
+    if model.is_empty() || model.len() > 128 {
+        return Err("Modelo inválido.".into());
+    }
+    if let Some(c) = &context {
+        c.validate()?;
+    }
+    let inner = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let provider = inner.chatgpt_provider.clone().ok_or("Integração ChatGPT indisponível neste host.")?;
+        if !matches!(provider.status(), ProviderStatus::Connected { plan_usage_authorized: true, .. }) { return Err("ChatGPT Plan Usage não está autorizado. Reconecte a conta.".to_string()); }
+        let conv = match conversation_id {
+            Some(id) => {
+                let store=inner.store.lock().map_err(|_| "store bloqueado".to_string())?;
+                if store.conversation_mode(&id).map_err(|e| e.to_string())? != Some(one_protocol::ChatMode::Orchestrator) { return Err("conversa do orquestrador inexistente".into()); }
+                id
+            }
+            None => inner.store.lock().map_err(|_| "store bloqueado".to_string())?.chat_conversation_create().map_err(|e| e.to_string())?,
+        };
+        if let Some(c) = &context {
+            inner.store.lock().map_err(|_| "store bloqueado".to_string())?.chat_conversation_context_set(&conv, c).map_err(|e| e.to_string())?;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut active=inner.active_chats.lock().map_err(|_| "gerações bloqueadas".to_string())?;
+            if active.contains_key(&conv) { return Err("Já existe uma geração nesta conversa.".into()); }
+            active.insert(conv.clone(),cancel.clone());
+        }
+        let result = (|| {
+            let (user_id, assistant_id, items) = {
+                let store=inner.store.lock().map_err(|_| "store bloqueado".to_string())?;
+                let existing=store.chat_messages_list(&conv).map_err(|e| e.to_string())?;
+                let recent: Vec<_>=existing.iter().filter(|m| matches!(m.state,ChatMessageState::Completed)).rev().take(20).collect::<Vec<_>>().into_iter().rev().collect();
+                let mut items: Vec<ChatItem>=recent.iter().map(|m| match m.role { ChatRole::User=>ChatItem::User(m.text.clone()), ChatRole::Orchestrator=>ChatItem::Assistant(m.text.clone()) }).collect();
+                items.push(ChatItem::User(text.clone()));
+                let bytes: usize=items.iter().map(|x| match x { ChatItem::User(s)|ChatItem::Assistant(s)=>s.len(), _=>0 }).sum();
+                if bytes > 32 * 1024 { return Err("O histórico desta conversa excede o limite de 32 KB.".into()); }
+                let user=store.chat_message_insert(&conv,ChatRole::User,&text,Some(&model),ChatMessageState::Completed).map_err(|e|e.to_string())?;
+                let assistant=store.chat_message_insert(&conv,ChatRole::Orchestrator,"",Some(&model),ChatMessageState::Streaming).map_err(|e|e.to_string())?;
+                (user,assistant,items)
+            };
+            let _ = user_id;
+            let instructions="Você é o consultor técnico do OneAgent. Ajude o usuário a entender e planejar demandas de software. Nesta etapa, não afirme que executou alterações e não delegue tarefas: a execução requer uma etapa futura com autorização explícita.";
+            let tools=[];
+            let req=TurnRequest { instructions, items:&items, tools:&tools };
+            let output=provider.complete_chat_cancellable(&model,&req,Some(&cancel),&mut |event| {
+                if let TurnEvent::TextDelta(delta)=event {
+                    if cancel.load(Ordering::Acquire) { return; }
+                    if let Ok(store)=inner.store.lock() { let _=store.chat_message_delta(&assistant_id,&delta); }
+                }
+            });
+            let store=inner.store.lock().map_err(|_| "store bloqueado".to_string())?;
+            match output {
+                Ok(out) if out.tool_calls.is_empty() && !cancel.load(Ordering::Acquire) => {
+                    store.chat_message_finish(&conv,&assistant_id,ChatMessageState::Completed,out.model.as_deref(),&out.usage,None).map_err(|e|e.to_string())?;
+                    Ok(conv.clone())
+                }
+                Ok(out) if !out.tool_calls.is_empty() => {
+                    let err="O provedor retornou uma chamada de ferramenta; ferramentas estão desativadas nesta fase.";
+                    store.chat_message_finish(&conv,&assistant_id,ChatMessageState::Error,out.model.as_deref(),&out.usage,Some(err)).map_err(|e|e.to_string())?;
+                    Err(err.into())
+                }
+                Ok(out) => {
+                    store.chat_message_finish(&conv,&assistant_id,ChatMessageState::Interrupted,out.model.as_deref(),&out.usage,None).map_err(|e|e.to_string())?;
+                    Err("Geração interrompida.".into())
+                }
+                Err(error) => {
+                    let message=error.message().to_owned();
+                    let was_cancelled=cancel.load(Ordering::Acquire);
+                    store.chat_message_finish(&conv,&assistant_id,if was_cancelled { ChatMessageState::Interrupted } else { ChatMessageState::Error },None,&UsageInfo::default(),if was_cancelled { None } else { Some(&message) }).map_err(|e|e.to_string())?;
+                    if was_cancelled { Err("Geração interrompida.".into()) } else { Err(message) }
+                }
+            }
+        })();
+        if let Ok(mut active)=inner.active_chats.lock() { active.remove(&conv); }
+        result
+    }).await.map_err(|e|e.to_string())?
+}
+
+#[tauri::command]
+fn chatgpt_cancel_generation(state: State<'_, AppState>, conversation_id: String) -> bool {
+    let active = state
+        .0
+        .active_chats
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(flag) = active.get(&conversation_id) {
+        flag.store(true, Ordering::Release);
+        true
+    } else {
+        false
+    }
 }
 
 /// Detecta as CLIs deste Mac (somente leitura; só executa as aprovadas). Serializada e limitada.
@@ -232,26 +440,52 @@ pub fn run() {
             store.ensure_local_gateway().map_err(|e| e.to_string())?;
             // execuções que ficaram ativas quando o app fechou (ou caiu) viram "interrompidas"
             store.reconcile_interrupted().map_err(|e| e.to_string())?;
+            store
+                .chat_generation_reconcile()
+                .map_err(|e| e.to_string())?;
             let store = Arc::new(Mutex::new(store));
             let exec = ExecService::new(
                 store.clone(),
                 Arc::new(SystemHost::new()),
                 ExecLimits::default(),
             );
+            let (orchestrator_provider, chatgpt_provider): (
+                Arc<dyn OrchestratorProvider>,
+                Option<Arc<ChatGptProvider>>,
+            ) = match ChatGptProvider::new() {
+                Ok(provider) => {
+                    let provider = Arc::new(provider);
+                    (provider.clone(), Some(provider))
+                }
+                Err(error) => (
+                    Arc::new(DisconnectedProvider::new(format!(
+                        "Integração ChatGPT indisponível: {error}"
+                    ))),
+                    None,
+                ),
+            };
             app.manage(AppState(Arc::new(Inner {
                 store,
                 exec,
-                orchestrator_provider: Arc::new(DisconnectedProvider::new(
-                    "ChatGPT Plus não conectado nesta fase.",
-                )),
+                orchestrator_provider,
+                chatgpt_provider,
                 detect: Throttle::new(DETECT_TTL),
                 approval_open: AtomicBool::new(false),
+                active_chats: Mutex::new(HashMap::new()),
             })));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             store_status,
             orchestrator_provider_status,
+            connect_chatgpt_plan,
+            refresh_chatgpt_models,
+            disconnect_chatgpt_plan,
+            chat_conversations_list,
+            chat_messages_list,
+            chat_conversation_set_context,
+            chatgpt_send_message,
+            chatgpt_cancel_generation,
             detect_local_gateway,
             approve_executable,
             list_workspaces,
@@ -291,8 +525,10 @@ mod tests {
             orchestrator_provider: Arc::new(DisconnectedProvider::new(
                 "ChatGPT Plus não conectado nesta fase.",
             )),
+            chatgpt_provider: None,
             detect: Throttle::new(DETECT_TTL),
             approval_open: AtomicBool::new(false),
+            active_chats: Mutex::new(HashMap::new()),
         }));
         let app = mock_builder()
             .plugin(tauri_plugin_dialog::init())
@@ -300,6 +536,14 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 store_status,
                 orchestrator_provider_status,
+                connect_chatgpt_plan,
+                refresh_chatgpt_models,
+                disconnect_chatgpt_plan,
+                chat_conversations_list,
+                chat_messages_list,
+                chat_conversation_set_context,
+                chatgpt_send_message,
+                chatgpt_cancel_generation,
                 detect_local_gateway,
                 approve_executable,
                 list_workspaces,
@@ -335,7 +579,7 @@ mod tests {
 
     #[test]
     fn webview_reaches_only_the_granted_commands() {
-        let (app, _state) = app_with_state();
+        let (app, state) = app_with_state();
         let w = WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .unwrap();
@@ -356,6 +600,68 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("não conectado"));
+
+        let conversations = call(&w, "chat_conversations_list", serde_json::json!({}))
+            .expect("histórico é permitido");
+        assert_eq!(conversations.as_array().unwrap().len(), 0);
+
+        // contexto por conversa: comando alcançável, restrito ao Modo Orquestrador e validado
+        let ctx = serde_json::json!({
+            "gatewayId":"local","workspaceId":"ws1","executorEngine":"auto",
+            "executorModel":null,"orchestratorModel":"gpt-test"
+        });
+        let missing = call(
+            &w,
+            "chat_conversation_set_context",
+            serde_json::json!({ "conversationId":"cv_inexistente", "context":ctx }),
+        )
+        .expect_err("conversa inexistente");
+        assert!(missing.contains("inexistente"), "{missing}");
+        let conv = state
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .chat_conversation_create()
+            .unwrap();
+        let direct = state
+            .0
+            .store
+            .lock()
+            .unwrap()
+            .conversation_create(one_protocol::ChatMode::Direct, "d")
+            .unwrap();
+        let wrong_mode = call(
+            &w,
+            "chat_conversation_set_context",
+            serde_json::json!({ "conversationId":direct, "context":ctx }),
+        )
+        .expect_err("conversa do Modo direto não aceita contexto");
+        assert!(wrong_mode.contains("inexistente"), "{wrong_mode}");
+        let too_long = serde_json::json!({ "gatewayId":"x".repeat(200) });
+        assert!(call(
+            &w,
+            "chat_conversation_set_context",
+            serde_json::json!({ "conversationId":conv, "context":too_long }),
+        )
+        .is_err());
+        call(
+            &w,
+            "chat_conversation_set_context",
+            serde_json::json!({ "conversationId":conv, "context":ctx }),
+        )
+        .expect("contexto é permitido");
+        let listed = call(&w, "chat_conversations_list", serde_json::json!({})).unwrap();
+        assert_eq!(listed[0]["context"]["executorEngine"], "auto");
+        assert_eq!(listed[0]["context"]["orchestratorModel"], "gpt-test");
+
+        let send = call(
+            &w,
+            "chatgpt_send_message",
+            serde_json::json!({ "text":"oi", "model":"gpt-test", "conversationId":null }),
+        )
+        .expect_err("sem provedor não envia mensagens");
+        assert!(send.contains("Integração ChatGPT indisponível"));
 
         let gw = call(
             &w,
@@ -399,6 +705,13 @@ mod tests {
             .unwrap();
         let err = call(&w, "store_status", serde_json::json!({}))
             .expect_err("janela não prevista na capability");
+        assert!(err.contains("not allowed"), "{err}");
+        let err = call(
+            &w,
+            "chatgpt_send_message",
+            serde_json::json!({ "text":"oi", "model":"gpt-test", "conversationId":null }),
+        )
+        .expect_err("o comando de conversa não deve ser concedido a outra janela");
         assert!(err.contains("not allowed"), "{err}");
     }
 

@@ -24,6 +24,16 @@ const paths = {
       <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9 7 7M17 17l2.1 2.1M19.1 4.9 17 7M7 17l-2.1 2.1" />
     </>
   ),
+  plus: <path d="M12 5v14M5 12h14" />,
+  send: <path d="M12 19V5M5 12l7-7 7 7" />,
+  stop: <rect x="6" y="6" width="12" height="12" rx="2" />,
+  chevron: <path d="m6 9 6 6 6-6" />,
+  history: (
+    <>
+      <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+      <path d="M3 3v5h5M12 7v5l3 2" />
+    </>
+  ),
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;

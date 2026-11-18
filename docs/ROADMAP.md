@@ -36,10 +36,10 @@ As fases numeradas abaixo da 2A foram substituídas pela sequência de prioridad
 
 ## Revisão de rumo (2026-11-17) — sequência vigente
 
-A Fase 2A implementa o **Modo direto** com Codex. A base 3A está concluída e verificada localmente, ainda sem commit. Ordem aprovada; cada etapa depende de autorização:
+A Fase 2A implementa o **Modo direto** com Codex. Fase 3A commitada em `13f051a`; a integração 3B está implementada localmente e a autorização oficial foi validada. Ordem aprovada:
 
-1. **3A — Fundação do OneOrchestrator (concluída localmente):** interface, provedor roteirizado de testes, catálogo tipado e política Rust, separação visual dos modos e estado real. Sem rede ou chamadas pagas.
-2. **3B — ChatGPT Plan Usage:** priorizar Sign in with ChatGPT se oficialmente disponível e elegível. OAuth PKCE e Keychain. Bloqueio deve ser documentado com alternativas; API paga exige autorização separada.
+1. **3A — Fundação do OneOrchestrator (concluída e commitada):** interface, provedor simulado de testes, catálogo tipado, política Rust, separação visual dos modos e estado real.
+2. **3B — ChatGPT Plan Usage (autenticação validada):** Sign in with ChatGPT concedeu `chatgpt.tokens.use.direct` nesta máquina e retornou catálogo de modelos. OAuth PKCE e Keychain. A primeira chamada Responses aguarda autorização explícita; sem API paga.
 3. **Provisionamento remoto — Gateway Linux via SSH:** primeiro alias `flowsharp`; inspeção somente leitura, plano de instalação, depois registro/autenticação/heartbeat. Nenhum acesso ou alteração à VPS sem aprovação explícita.
 4. **Backlog posterior:** Claude Code e Cursor; OneContext Handoff; OneProject Discovery; OneSkills Registry; OneUsage; OneAgent Factory.
 

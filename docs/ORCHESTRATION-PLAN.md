@@ -1,13 +1,13 @@
 # OneAgent — Plano da arquitetura de orquestração
 
-> 2026-11-17 · **Plano aprovado.** A Fase 2A permanece como Modo Direto. A implementação 3A foi concluída e verificada neste working tree, ainda sem commit. OAuth real, chamadas pagas e acesso à VPS não estão autorizados.
+> 2026-11-17 · **Plano aprovado.** A Fase 2A permanece como Modo Direto. A Fase 3A está commitada em `13f051a`. A implementação 3B usa Sign in with ChatGPT; a primeira chamada à Responses API aguarda autorização explícita. Sem API Key e sem acesso à VPS.
 > Reaproveita, sem repetir: `ORCHESTRATOR.md` (prompt, hierarquia, aprovações, testes de comportamento), `GATEWAY.md` (isolamento e provisionamento), `ISOLATION.md`, `TOKEN-OPTIMIZATION.md`, `CAPABILITIES.md`, `CONTEXT.md`.
 
 ## 1. Correção de rumo
 
 A Fase 2A entregou o **Modo direto** (usuário → OneHub → Gateway → Codex). Foi útil para validar execução, aprovação, persistência e isolamento, mas **não é** a arquitetura definitiva. O produto é: o usuário conversa com o **OneOrchestrator (ChatGPT)**, que planeja e delega ao OneHub; o OneHub aplica a política e aciona Gateways e motores. O acesso direto às CLIs continua existindo, mas como modo separado e rotulado.
 
-**Estado do trabalho:** a implementação 3A está presente como alterações locais não commitadas nesta branch. Este plano descreve o alvo e os critérios; o `git status` e a revisão do código determinam o que já está implementado e o que falta validar. Não confundir alterações locais com trabalho integrado ou fase concluída.
+**Estado do trabalho:** Fase 3A concluída e commitada em `feature/chatgpt-plan-provider`. Fase 3B implementada localmente; autorização oficial confirmada nesta máquina, inclusive `chatgpt.tokens.use.direct`; nenhuma chamada à Responses API foi realizada. As alterações da 3B permanecem sem commit.
 
 ## 2. O que existe e o que falta
 
@@ -17,7 +17,7 @@ A Fase 2A entregou o **Modo direto** (usuário → OneHub → Gateway → Codex)
 | OneHub: persistência (V4 nas alterações locais), aprovação de executáveis, workspaces autorizados, auditoria | **Implementação local** | Falta política central por Gateway e fluxo de aprovação para ações sensíveis |
 | Gateway local + Codex (execução real, leitura confinada, cancelamento, métricas) | **Feito**, validação manual pendente | Sem binário de Gateway separado; roda dentro do app |
 | Contrato de motor (`EngineAdapter`/`EngineParser`) | **Feito** (só Codex) | Claude e Cursor ausentes |
-| OneOrchestrator (provedor, loop de ferramentas, conversa) | **3A implementada e verificada localmente** | Contrato, provedor desconectado, provedor roteirizado de teste, persistência e loop limitado; nenhum provedor real |
+| OneOrchestrator (provedor, loop de ferramentas, conversa) | **Base 3A commitada; integração SIWC 3B local** | OAuth PKCE, Keychain, renovação/revogação, catálogo OAuth; primeira chamada Responses aguarda autorização |
 | Ferramentas do OneHub para o orquestrador | **3A implementada e verificada localmente** | Catálogo tipado, políticas Rust e isolamento por conversa; escrita permanece bloqueada e execução read-only |
 | OneContext (ingestão, recuperação, handoff) | **Só esquema** (V1) | FTS5 pronto, sem ingestão |
 | SSH e provisionamento remoto | **Ausente** | Só planejamento (`GATEWAY.md` §6) |
@@ -54,7 +54,7 @@ Fatos de fontes oficiais lidas em 2026-11-17 (detalhe e URLs em `DECISIONS.md` D
 | **D. ChatKit** | Exige servidor próprio ou fluxo hospedado; UI própria é requisito | Não usar |
 | **E. Cookies, sessão da web, token do Codex, `backend-api`** | Não documentados e fora de política | **Proibido** |
 
-**Regra de decisão:** tentar primeiro o fluxo oficial de plan usage na 3B, após fechar a validação documental e receber autorização para essa etapa. A elegibilidade não é presumida. Se houver bloqueio, documentar a resposta e comparar alternativas; API paga depende de autorização explícita e orçamento aprovado. Não alterar a visibilidade do repositório para contornar elegibilidade.
+**Estado verificado:** o login oficial nesta máquina concedeu `chatgpt.tokens.use.direct`; o catálogo OAuth retornou modelos listados. Isso confirma a autorização desta conta/host no momento do teste, não uma disponibilidade permanente. A primeira chamada à Responses API ainda exige autorização explícita. API paga depende de autorização explícita e orçamento aprovado. Não alterar a visibilidade do repositório para contornar elegibilidade.
 
 ### 4.1 Interface de provedor
 
@@ -106,8 +106,8 @@ Cada etapa só começa com a sua aprovação. Nenhuma faz chamada paga sem autor
 
 | Etapa | Entrega | Custo | Critérios de aceitação |
 |---|---|---|---|
-| **3A — Fundação do OneOrchestrator** (**concluída localmente; sem commit**) | Contrato `OrchestratorProvider`; provedor simulado só para testes; catálogo tipado; política Rust; UI com modos separados e estado real | R$ 0, sem rede | `pnpm check` e `pnpm build` passam; delegação simulada, limites, argumentos estritos, proteção contra injeção, modo direto preservado, provedor desconectado sem respostas simuladas e escrita bloqueada |
-| **3B — ChatGPT Plan Usage** | Confirmar disponibilidade/elegibilidade oficial; se elegível, OAuth PKCE, Keychain, validação de escopos, modelos, refresh e revogação | Cota do plano, sem API paga | Só iniciar após autorização da etapa; chamada real exige autorização expressa. Bloqueio documentado com alternativas propostas |
+| **3A — Fundação do OneOrchestrator** (**concluída; commit `13f051a`**) | Contrato `OrchestratorProvider`; simulado para testes; catálogo tipado; política Rust; modos separados | R$ 0 | Verificação concluída; Modo Direto preservado |
+| **3B — ChatGPT Plan Usage** (**integração local; autenticação validada**) | SIWC OAuth PKCE, Keychain, escopos separados, modelos, refresh/revogação e Responses streaming preparado | Uso da cota do plano; sem API paga | Login e Plan Usage autorizados nesta conta. Nenhuma chamada Responses feita; primeira chamada aguarda autorização explícita |
 | **2B — Provisionamento remoto por SSH** | Via alias `flowsharp`: conexão, inspeção Linux somente leitura, plano de instalação do OneNode Linux, registro, autenticação e heartbeat | R$ 0 planejado | Nenhum acesso ou alteração na VPS até aprovação explícita para cada etapa. Depois desta etapa vêm Claude e Cursor |
 | **Seguintes** | Claude Code e Cursor CLI → OneContext Handoff → OneProject Discovery → OneSkills Registry → OneUsage → OneAgent Factory | | **Somente planejados**; nada implementado antecipadamente |
 
@@ -149,7 +149,7 @@ Registradas em `DECISIONS.md` (D-026 a D-031): priorizar plan usage oficial se e
 
 A pesquisa oficial registrada em `DECISIONS.md` D-026 (2026-11-17) descreveu suporte a projetos pessoais locais e registro dinâmico, mas não substitui uma verificação atual do fluxo, dos termos nem da elegibilidade da conta. A disponibilidade pode mudar por ser preview; a resposta definitiva depende do fluxo oficial para este app e usuário.
 
-Na 3B, antes de implementar: reconfirmar documentação e termos oficiais; testar apenas o caminho de autenticação autorizado; registrar qualquer erro de elegibilidade sem repetir tentativas indevidas. Se elegibilidade for negada ou incerta, parar a integração e apresentar opções. **Não** publicar ou alterar visibilidade do repositório por inferência. API paga requer decisão e autorização independentes.
+Validação concluída nesta máquina: o fluxo oficial retornou uma sessão válida com `chatgpt.tokens.use.direct` e modelos listados. Para outro host/conta, verificar elegibilidade novamente; diante de bloqueio, registrar o erro e parar sem improvisar autenticação. **Não** publicar ou alterar visibilidade do repositório por inferência. API paga requer decisão e autorização independentes.
 
 ## 12. Requisitos transversais (valem para todas as etapas; sem repetir os detalhes)
 

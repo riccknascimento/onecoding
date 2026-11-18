@@ -3,4 +3,4 @@
 /**
  * Estado REAL do provedor do orquestrador. A UI só mostra "conectado" quando isto disser.
  */
-export type ProviderStatus = { "state": "disconnected", reason: string, } | { "state": "simulated", provider: string, label: string, } | { "state": "connected", provider: string, label: string, models: Array<string>, } | { "state": "error", message: string, };
+export type ProviderStatus = { "state": "disconnected", reason: string, } | { "state": "simulated", provider: string, label: string, } | { "state": "connected", provider: string, label: string, models: Array<string>, plan_usage_authorized: boolean, } | { "state": "error", message: string, };

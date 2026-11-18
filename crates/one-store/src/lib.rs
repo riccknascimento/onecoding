@@ -738,6 +738,77 @@ mod tests {
     }
 
     #[test]
+    fn chat_history_survives_reopen_and_tracks_state_usage_and_isolation() {
+        use one_protocol::{ChatMessageState, ChatRole, UsageInfo};
+        let p = temp_db("chat-history");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let conv;
+        let other;
+        {
+            let s = Store::open(&p).unwrap();
+            conv = s.chat_conversation_create().unwrap();
+            other = s.chat_conversation_create().unwrap();
+            s.chat_message_insert(
+                &conv,
+                ChatRole::User,
+                "pergunta",
+                Some("model-a"),
+                ChatMessageState::Completed,
+            )
+            .unwrap();
+            let assistant = s
+                .chat_message_insert(
+                    &conv,
+                    ChatRole::Orchestrator,
+                    "",
+                    Some("model-a"),
+                    ChatMessageState::Streaming,
+                )
+                .unwrap();
+            s.chat_message_delta(&assistant, "resposta ").unwrap();
+            s.chat_message_delta(&assistant, "persistida").unwrap();
+            s.chat_message_finish(
+                &conv,
+                &assistant,
+                ChatMessageState::Completed,
+                Some("model-a"),
+                &UsageInfo {
+                    input_tokens: Some(10),
+                    output_tokens: Some(4),
+                    cached_tokens: None,
+                    reasoning_tokens: None,
+                },
+                None,
+            )
+            .unwrap();
+            s.chat_message_insert(
+                &other,
+                ChatRole::Orchestrator,
+                "ativa",
+                Some("model-b"),
+                ChatMessageState::Streaming,
+            )
+            .unwrap();
+        }
+        let s = Store::open(&p).unwrap();
+        let rows = s.chat_messages_list(&conv).unwrap();
+        assert_eq!(rows.len(), 2, "deltas atualizam um único registro");
+        assert_eq!(rows[1].text, "resposta persistida");
+        assert_eq!(rows[1].state, ChatMessageState::Completed);
+        assert_eq!(rows[1].provider.as_deref(), Some("chatgpt_plan"));
+        assert_eq!(rows[1].model.as_deref(), Some("model-a"));
+        assert_eq!(rows[1].usage.input_tokens, Some(10));
+        assert_eq!(s.chat_messages_list(&other).unwrap().len(), 1);
+        s.chat_generation_reconcile().unwrap();
+        assert_eq!(
+            s.chat_messages_list(&other).unwrap()[0].state,
+            ChatMessageState::Interrupted
+        );
+        assert_eq!(s.chat_conversations_list().unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
     fn upgrade_v3_to_v4_keeps_runs_as_direct_user_initiated() {
         use one_protocol::{ChatMode, RunInitiator};
         let p = temp_db("v4up");
@@ -762,6 +833,85 @@ mod tests {
         );
         assert_eq!(s.conversation_mode("c").unwrap(), Some(ChatMode::Direct));
         assert!(PathBuf::from(format!("{}.pre-v4.bak", p.display())).exists());
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn upgrade_v5_to_v6_keeps_conversations_and_adds_empty_context() {
+        use one_protocol::ChatMode;
+        let p = temp_db("v6up");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        {
+            let c = Connection::open(&p).unwrap();
+            c.pragma_update(None, "foreign_keys", "ON").unwrap();
+            migrations::apply_with(&c, &migrations::MIGRATIONS[..5]).unwrap();
+            c.execute_batch(
+                "INSERT INTO conversations(id,title,mode,provider,model,updated_at) VALUES('co','Plano','orchestrator','chatgpt_plan','gpt-a','2026-11-17T12:00:00Z');
+                 INSERT INTO messages(id,conversation_id,role,body,provider,model) VALUES('m1','co','user','oi','chatgpt_plan','gpt-a');
+                 INSERT INTO conversations(id,title,mode) VALUES('cd','Direta','direct');",
+            )
+            .unwrap();
+        }
+        let s = Store::open(&p).unwrap();
+        assert_eq!(s.schema_version().unwrap(), LATEST_VERSION);
+        assert_eq!(LATEST_VERSION, 6);
+        assert!(PathBuf::from(format!("{}.pre-v6.bak", p.display())).exists());
+        let list = s.chat_conversations_list().unwrap();
+        assert_eq!(list.len(), 1, "só conversas do orquestrador");
+        assert_eq!(list[0].title, "Plano");
+        assert_eq!(list[0].model.as_deref(), Some("gpt-a"));
+        assert_eq!(list[0].context, one_protocol::ChatContext::default());
+        assert_eq!(s.chat_messages_list("co").unwrap().len(), 1);
+        assert_eq!(s.conversation_mode("cd").unwrap(), Some(ChatMode::Direct));
+        let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn chat_context_persists_per_conversation_across_reopen() {
+        use one_protocol::{ChatContext, ExecutorPreference};
+        let p = temp_db("ctx");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let (a, b, direct);
+        {
+            let s = Store::open(&p).unwrap();
+            a = s.chat_conversation_create().unwrap();
+            b = s.chat_conversation_create().unwrap();
+            direct = s
+                .conversation_create(one_protocol::ChatMode::Direct, "d")
+                .unwrap();
+            let ctx = ChatContext {
+                gateway_id: Some("local".into()),
+                workspace_id: Some("ws-removida".into()), // sem FK: pasta removida não quebra a conversa
+                executor_engine: Some(ExecutorPreference::Auto),
+                executor_model: None,
+                orchestrator_model: Some("gpt-5".into()),
+            };
+            assert!(s.chat_conversation_context_set(&a, &ctx).unwrap());
+            assert!(
+                !s.chat_conversation_context_set(&direct, &ctx).unwrap(),
+                "Modo direto não recebe contexto de conversa"
+            );
+            assert!(!s
+                .chat_conversation_context_set("cv_nao_existe", &ctx)
+                .unwrap());
+        }
+        let s = Store::open(&p).unwrap();
+        let list = s.chat_conversations_list().unwrap();
+        let ca = list.iter().find(|c| c.id == a).unwrap();
+        assert_eq!(ca.context.gateway_id.as_deref(), Some("local"));
+        assert_eq!(ca.context.workspace_id.as_deref(), Some("ws-removida"));
+        assert_eq!(ca.context.executor_engine, Some(ExecutorPreference::Auto));
+        assert_eq!(ca.context.orchestrator_model.as_deref(), Some("gpt-5"));
+        let cb = list.iter().find(|c| c.id == b).unwrap();
+        assert_eq!(cb.context, ChatContext::default(), "isolado por conversa");
+        // CHECK do banco recusa motor desconhecido
+        assert!(s
+            .conn
+            .execute(
+                "UPDATE conversations SET ctx_executor_engine='gemini' WHERE id=?1",
+                [&a]
+            )
+            .is_err());
         let _ = std::fs::remove_dir_all(p.parent().unwrap().parent().unwrap());
     }
 }

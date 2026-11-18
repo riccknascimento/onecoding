@@ -52,12 +52,12 @@ export function App() {
   };
 
   return (
-    <div className="shell">
+    <div className={`shell${section === "chat" ? " compact" : ""}`}>
       <aside className="sidebar">
         <div className="drag" data-tauri-drag-region />
         <div className="brand">
           <span className="brand-mark" aria-hidden="true" />
-          <span>OneAgent</span>
+          <span className="brand-name">OneAgent</span>
         </div>
         <nav aria-label="Principal">
           {SECTIONS.map((s) => (
@@ -66,16 +66,17 @@ export function App() {
               type="button"
               className={`nav-item${section === s.id ? " active" : ""}`}
               aria-current={section === s.id ? "page" : undefined}
+              title={s.label}
               onClick={() => setSection(s.id)}
             >
               <Icon name={s.icon} />
-              {s.label}
+              <span className="nav-label">{s.label}</span>
             </button>
           ))}
         </nav>
         <div className="sidebar-foot">Fase 2A · execução local</div>
       </aside>
-      <main className="main">
+      <main className={`main${section === "chat" ? " main-chat" : ""}`}>
         <div className="drag" data-tauri-drag-region />
         {section === "chat" && <ChatPage local={local} />}
         {section === "gateways" && <GatewaysPage local={local} onApprove={onApprove} />}

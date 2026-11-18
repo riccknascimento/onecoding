@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-chat-conversation-set-context"
+description = "Enables the chat_conversation_set_context command without any pre-configured scope."
+commands.allow = ["chat_conversation_set_context"]
+
+[[permission]]
+identifier = "deny-chat-conversation-set-context"
+description = "Denies the chat_conversation_set_context command without any pre-configured scope."
+commands.deny = ["chat_conversation_set_context"]

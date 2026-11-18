@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-disconnect-chatgpt-plan"
+description = "Enables the disconnect_chatgpt_plan command without any pre-configured scope."
+commands.allow = ["disconnect_chatgpt_plan"]
+
+[[permission]]
+identifier = "deny-disconnect-chatgpt-plan"
+description = "Denies the disconnect_chatgpt_plan command without any pre-configured scope."
+commands.deny = ["disconnect_chatgpt_plan"]

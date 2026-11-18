@@ -115,7 +115,7 @@ Sem permissão de eventos na webview e sem canal extra: os eventos já estão no
 (1) Perfil restrito de leitura como padrão. (2) `TrustedLocalRead` não exposto na interface. (3) Nenhuma permissão ampliada para consertar Git/Node. (4) Limitação de Git/Node registrada. (5) Três modos futuros: Investigação Restrita (atual), Desenvolvimento Isolado e Administração Autorizada (`ISOLATION.md` §6). (6) O perfil Beta não é garantia absoluta de isolamento do processo inteiro. (7) Sem sandbox de Linux ou Windows nesta fase.
 
 ### D-026 — Provedor do orquestrador · **Prioridade: ChatGPT Plan Usage, se disponível e elegível**
-Na 3B, priorizar a integração oficial Sign in with ChatGPT/Plan Usage. **Não usar API paga sem autorização explícita; não assumir elegibilidade.** Se o fluxo oficial bloquear o usuário ou o projeto, registrar a evidência e apresentar alternativas antes de decidir. Não alterar a visibilidade do repositório para contornar elegibilidade. A investigação documental foi feita em 2026-11-17; reconfirmar disponibilidade, termos e elegibilidade antes da implementação, pois o recurso é preview:
+Decisão histórica de prioridade, consolidada pela implementação e validação em D-032. **Não usar API paga sem autorização explícita; não presumir elegibilidade em outros hosts ou contas.** Não alterar a visibilidade do repositório para contornar elegibilidade. A investigação documental foi feita em 2026-11-17; detalhes do protocolo oficial e do fluxo seguem:
 - **Autorização:** `GET https://auth.openai.com/api/accounts/authorize` no navegador do sistema, com `client_id=dynamic_agent_client` (1º registro) e `agent_name_hint`, `ext_agent_host_id`, `response_type=code`, `redirect_uri=http://127.0.0.1:<porta>/auth/callback` (não `localhost`; listener antes do navegador), `scope="openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"`, `resource=https://api.openai.com/v1`, `state`, `nonce`, PKCE `S256`. O callback devolve o `client_id` emitido (`oaiapp_…`), que deve ser **salvo antes** da troca e reutilizado.
 - **Troca e refresh:** `POST https://auth.openai.com/api/accounts/oauth/token` (form, sem secret). Access ~1 h, refresh ~30 dias com rotação (guardar o novo; serializar refreshes). **Revogação:** `revocation_endpoint` do discovery (`/.well-known/openid-configuration`; URL literal não documentada), 200 vazio = sucesso.
 - **Validação do ID token:** assinatura via JWKS (`/.well-known/jwks.json`), `iss=https://auth.openai.com`, `aud` = client_id emitido, `exp`, `nonce`.
@@ -142,9 +142,12 @@ Provisionamento remoto é prioridade, via o alias `flowsharp` já configurado no
 ### D-031 — Ordem de implementação · **Aceita**
 3A (OneOrchestrator) → 3B (ChatGPT Plus) → 2B (provisionamento SSH, antes de Claude/Cursor) → Claude e Cursor → OneContext Handoff → OneProject Discovery → OneSkills Registry → OneUsage → OneAgent Factory (os últimos só planejados). "2B" passa a significar provisionamento remoto.
 
+### D-032 — Integração ChatGPT Plan Usage · **Implementada localmente; chamada Responses pendente de autorização**
+OneAgent usa o fluxo oficial Sign in with ChatGPT com OAuth authorization code + PKCE, navegador do sistema, callback loopback, host ID persistente no Keychain, validação OIDC e armazenamento de credenciais somente no macOS Keychain. O login e o escopo `chatgpt.tokens.use.direct` foram confirmados nesta máquina; a lista de modelos vem de `/v1/models` com visibilidade `list`. Refresh rotacionado, revogação e Responses streaming estão implementados. A primeira chamada `POST /v1/responses` exige autorização explícita e ainda não ocorreu. Sem API Key, endpoint privado, token do Codex, fallback de cobrança ou acesso à VPS.
+
 ## Riscos e incompatibilidades (atualizados)
 
-1. Plan Usage/Sign in with ChatGPT está sujeito a mudanças, elegibilidade e termos que precisam ser confirmados antes da 3B (D-026).
+1. Plan Usage/Sign in with ChatGPT continua sujeito a mudanças de elegibilidade, limites e termos; a validação atual confirma somente esta conta/host (D-032).
 2. Termos das assinaturas em automação não confirmados para produto de terceiros (D-008).
 3. Aprovação mid-run desigual entre motores (D-006).
 4. Cursor `-f`/`--yolo` libera tudo; isolamento por worktree obrigatório.

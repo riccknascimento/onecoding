@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-connect-chatgpt-plan"
+description = "Enables the connect_chatgpt_plan command without any pre-configured scope."
+commands.allow = ["connect_chatgpt_plan"]
+
+[[permission]]
+identifier = "deny-connect-chatgpt-plan"
+description = "Denies the connect_chatgpt_plan command without any pre-configured scope."
+commands.deny = ["connect_chatgpt_plan"]

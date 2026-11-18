@@ -11,7 +11,9 @@ const gateway: GatewayInfo = {
 describe("seletor de Gateway do Chat", () => {
   it("passa a usar o Gateway local quando a detecção termina depois da tela montar", () => {
     const { rerender } = render(<ChatPage local={{ phase: "loading" }} />);
-    expect(screen.getByRole("combobox", { name: "Gateway" })).toHaveValue("demo-apliflow");
+    // Gateway de demonstração nunca é selecionável: enquanto o local não é detectado, nada fica escolhido.
+    expect(screen.getByRole("combobox", { name: "Gateway" })).toHaveValue("");
+    expect(screen.getByRole("option", { name: "Apliflow (demo) — indisponível" })).toBeDisabled();
     const ready: LocalGatewayState = { phase: "ready", gateway };
     rerender(<ChatPage local={ready} />);
     expect(screen.getByRole("combobox", { name: "Gateway" })).toHaveValue("local");

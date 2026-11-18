@@ -388,6 +388,7 @@ pub enum ProviderStatus {
         provider: String,
         label: String,
         models: Vec<String>,
+        plan_usage_authorized: bool,
     },
     Error {
         message: String,
@@ -407,6 +408,90 @@ pub enum ChatRole {
 pub struct ChatMessage {
     pub role: ChatRole,
     pub text: String,
+    pub ts: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ChatMessageState {
+    Streaming,
+    Completed,
+    Interrupted,
+    Error,
+}
+
+/// Executor preferido de uma conversa. `Auto` é só uma preferência futura: nesta etapa não delega nada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ExecutorPreference {
+    Auto,
+    Codex,
+    Claude,
+    Cursor,
+}
+
+/// Contexto operacional escolhido numa conversa (Gateway, projeto, executor e modelo do ChatGPT).
+/// É só preferência guardada: escolher um recurso NUNCA concede permissão de execução, e nada daqui
+/// entra na requisição ao provedor. Os valores são validados na leitura pela interface.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChatContext {
+    pub gateway_id: Option<String>,
+    pub workspace_id: Option<String>,
+    pub executor_engine: Option<ExecutorPreference>,
+    pub executor_model: Option<String>,
+    pub orchestrator_model: Option<String>,
+}
+
+impl ChatContext {
+    /// Limite de tamanho e sem caracteres de controle; a webview não é confiável.
+    pub fn validate(&self) -> Result<(), String> {
+        for v in [
+            &self.gateway_id,
+            &self.workspace_id,
+            &self.executor_model,
+            &self.orchestrator_model,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if v.is_empty() || v.len() > 128 || v.chars().any(char::is_control) {
+                return Err("Contexto da conversa inválido.".into());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ChatConversation {
+    pub id: String,
+    pub title: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub state: String,
+    pub updated_at: String,
+    pub context: ChatContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PersistedChatMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub role: ChatRole,
+    pub text: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub state: ChatMessageState,
+    pub error_message: Option<String>,
+    pub usage: UsageInfo,
     pub ts: String,
 }
 

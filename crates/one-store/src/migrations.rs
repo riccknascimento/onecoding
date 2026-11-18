@@ -197,6 +197,37 @@ CREATE TABLE orchestrator_events (
 ) STRICT;
 "#;
 
+/// V5: histórico persistente do chat do OneOrchestrator. Credenciais ficam exclusivamente no Keychain.
+const V5: &str = r#"
+ALTER TABLE conversations ADD COLUMN provider TEXT;
+ALTER TABLE conversations ADD COLUMN model TEXT;
+ALTER TABLE conversations ADD COLUMN state TEXT NOT NULL DEFAULT 'idle' CHECK (state IN ('idle','generating','error'));
+ALTER TABLE conversations ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE messages ADD COLUMN provider TEXT;
+ALTER TABLE messages ADD COLUMN model TEXT;
+ALTER TABLE messages ADD COLUMN state TEXT NOT NULL DEFAULT 'completed' CHECK (state IN ('streaming','completed','interrupted','error'));
+ALTER TABLE messages ADD COLUMN error_message TEXT;
+ALTER TABLE messages ADD COLUMN input_tokens INTEGER;
+ALTER TABLE messages ADD COLUMN output_tokens INTEGER;
+ALTER TABLE messages ADD COLUMN cached_tokens INTEGER;
+ALTER TABLE messages ADD COLUMN reasoning_tokens INTEGER;
+CREATE INDEX conversations_updated ON conversations(updated_at DESC);
+UPDATE conversations SET updated_at=created_at WHERE updated_at='';
+UPDATE messages SET state='interrupted' WHERE state='streaming';
+UPDATE conversations SET state='idle' WHERE state='generating';
+"#;
+
+/// V6: contexto operacional por conversa do orquestrador (Gateway, projeto, executor e modelos).
+/// Só `ADD COLUMN` anulável e sem FK: Gateways de demonstração e pastas removidas não podem quebrar a
+/// conversa; a interface valida na leitura. Preferência guardada, nunca permissão de execução.
+const V6: &str = r#"
+ALTER TABLE conversations ADD COLUMN ctx_gateway_id TEXT;
+ALTER TABLE conversations ADD COLUMN ctx_workspace_id TEXT;
+ALTER TABLE conversations ADD COLUMN ctx_executor_engine TEXT CHECK (ctx_executor_engine IN ('auto','codex','claude','cursor'));
+ALTER TABLE conversations ADD COLUMN ctx_executor_model TEXT;
+ALTER TABLE conversations ADD COLUMN ctx_orchestrator_model TEXT;
+"#;
+
 pub struct Migration {
     pub sql: &'static str,
     /// Exige `PRAGMA foreign_keys=OFF` durante a migração (reconstrução de tabela).
@@ -218,6 +249,14 @@ pub const MIGRATIONS: &[Migration] = &[
     },
     Migration {
         sql: V4,
+        fk_off: false,
+    },
+    Migration {
+        sql: V5,
+        fk_off: false,
+    },
+    Migration {
+        sql: V6,
         fk_off: false,
     },
 ];
