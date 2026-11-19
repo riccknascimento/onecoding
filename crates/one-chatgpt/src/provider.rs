@@ -125,14 +125,38 @@ impl OrchestratorProvider for ChatGptProvider {
         req: &TurnRequest<'_>,
         sink: &mut dyn FnMut(TurnEvent),
     ) -> Result<TurnOutput, ProviderError> {
+        self.complete_cancellable(req, None, sink)
+    }
+
+    /// Cancelar fecha a conexão HTTP em andamento (ver `until_cancelled`).
+    fn complete_cancellable(
+        &self,
+        req: &TurnRequest<'_>,
+        cancelled: Option<&AtomicBool>,
+        sink: &mut dyn FnMut(TurnEvent),
+    ) -> Result<TurnOutput, ProviderError> {
         let _guard = self.session_gate.lock().unwrap_or_else(|p| p.into_inner());
         let (credentials, access_token) = self.auth.token_for_request().map_err(auth_error)?;
-        let model = credentials.models.first().ok_or_else(|| {
+        let model = select_model(&credentials.models, req.model)?;
+        self.send_response(req, model, &access_token, cancelled, sink)
+    }
+}
+
+/// Modelo pedido pelo usuário (tem de existir na conta) ou o primeiro da conta. Nunca troca de modelo
+/// em silêncio: um modelo pedido e ausente é erro.
+fn select_model<'m>(
+    models: &'m [AvailableModel],
+    requested: Option<&str>,
+) -> Result<&'m AvailableModel, ProviderError> {
+    match requested {
+        Some(slug) => models.iter().find(|m| m.slug == slug).ok_or_else(|| {
+            ProviderError::Unsupported(format!("O modelo {slug} não está disponível nesta conta."))
+        }),
+        None => models.first().ok_or_else(|| {
             ProviderError::Unsupported(
                 "A conta não retornou modelos disponíveis para ChatGPT Plan Usage.".into(),
             )
-        })?;
-        self.send_response(req, model, &access_token, None, sink)
+        }),
     }
 }
 
@@ -143,7 +167,7 @@ fn model_label(model: &AvailableModel) -> String {
 fn responses_request(req: &TurnRequest<'_>, model: &AvailableModel) -> Value {
     let input: Vec<Value> = req.items.iter().map(|item| match item {
         ChatItem::User(text) => json!({"role":"user", "content":[{"type":"input_text", "text":text}]}),
-        ChatItem::Assistant(text) => json!({"role":"assistant", "content":[{"type":"input_text", "text":text}]}),
+        ChatItem::Assistant(text) => json!({"role":"assistant", "content":text}),
         ChatItem::ToolCall(call) => json!({"type":"function_call", "call_id":call.id, "name":call.name, "arguments":call.args.to_string()}),
         ChatItem::ToolOutput { call_id, content } => json!({"type":"function_call_output", "call_id":call_id, "output":content}),
     }).collect();
@@ -322,6 +346,9 @@ impl SseParser {
         sink: &mut dyn FnMut(TurnEvent),
     ) -> Result<bool, ProviderError> {
         if let Some(value) = line.strip_prefix("data:") {
+            if !self.data.is_empty() {
+                self.data.push('\n');
+            }
             self.data.push_str(value.trim_start());
         } else if line.trim().is_empty() && !self.data.is_empty() {
             let event: Value = serde_json::from_str(&self.data).map_err(|_| {
@@ -341,10 +368,14 @@ impl SseParser {
                             && event.get("type").and_then(Value::as_str)
                                 == Some("response.output_item.done")
                         {
-                            if let Some(call) = tool_call(item) {
-                                sink(TurnEvent::ToolCall(call.clone()));
-                                self.output.tool_calls.push(call);
-                            }
+                            let call = tool_call(item).ok_or_else(|| {
+                                ProviderError::Failed(
+                                    "Chamada de ferramenta malformada recebida da Responses API."
+                                        .into(),
+                                )
+                            })?;
+                            sink(TurnEvent::ToolCall(call.clone()));
+                            self.output.tool_calls.push(call);
                         }
                     }
                 }
@@ -359,6 +390,9 @@ impl SseParser {
                     sink(TurnEvent::Usage(self.output.usage.clone()));
                     self.completed = true;
                 }
+                // erro transmitido pela própria Responses API (ex.: parâmetros de ferramenta rejeitados):
+                // antes era ignorado e o stream terminava "sem response.completed", sem a causa real.
+                "error" => return Err(classify_error(&event)),
                 "response.failed" => {
                     let err = event
                         .pointer("/response/error")
@@ -462,6 +496,7 @@ mod tests {
             instructions: "",
             items: &items,
             tools: &tools,
+            model: None,
         };
         let json = responses_request(
             &req,
@@ -492,6 +527,7 @@ mod tests {
             instructions: "Do safe work",
             items: &items,
             tools: &tools,
+            model: None,
         };
         let model = AvailableModel {
             slug: "gpt-account-model".into(),
@@ -548,6 +584,92 @@ mod tests {
         assert!(observed
             .iter()
             .any(|e| matches!(e, TurnEvent::TextDelta(s) if s == "hello")));
+    }
+
+    /// Regressão do erro observado: um evento `error` em-stream era ignorado e o parser só relatava
+    /// "terminou sem response.completed". Agora o código de erro chega ao chamador.
+    #[test]
+    fn in_stream_error_event_is_reported_with_its_code_not_as_a_missing_completion() {
+        let event = json!({"type":"error","code":"invalid_function_parameters","message":"schema rejeitado","sequence_number":3});
+        let result = consume_sse(Cursor::new(format!("data: {event}\n\n")), None, &mut |_| {});
+        match result {
+            Err(ProviderError::Failed(m)) => {
+                assert!(m.contains("invalid_function_parameters"), "{m}");
+                assert!(!m.contains("sem response.completed"), "{m}");
+            }
+            other => panic!("esperado Failed com o código, veio {other:?}"),
+        }
+    }
+
+    #[test]
+    fn in_stream_error_event_with_plan_limit_is_classified_as_rate_limit() {
+        let event = json!({"type":"error","code":"subscription_sharing_usage_limit_exceeded"});
+        let result = consume_sse(Cursor::new(format!("data: {event}\n\n")), None, &mut |_| {});
+        assert!(matches!(result, Err(ProviderError::RateLimited(_))));
+    }
+
+    #[test]
+    fn requested_model_must_exist_in_the_account_and_default_is_the_first() {
+        let models = vec![
+            AvailableModel {
+                slug: "a".into(),
+                display_name: "A".into(),
+            },
+            AvailableModel {
+                slug: "b".into(),
+                display_name: "B".into(),
+            },
+        ];
+        assert_eq!(select_model(&models, None).unwrap().slug, "a");
+        assert_eq!(select_model(&models, Some("b")).unwrap().slug, "b");
+        // modelo pedido e ausente é erro, nunca troca silenciosa
+        assert!(matches!(
+            select_model(&models, Some("zzz")),
+            Err(ProviderError::Unsupported(_))
+        ));
+        assert!(matches!(
+            select_model(&[], None),
+            Err(ProviderError::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn sse_data_lines_of_one_event_are_joined_with_newlines() {
+        let body = "data: {\"type\":\"response.output_text.delta\",\ndata: \"delta\":\"ok\"}\n\n\
+                    data: {\"type\":\"response.completed\",\"response\":{\"model\":\"m\"}}\n\n";
+        let out = consume_sse(Cursor::new(body), None, &mut |_| {}).unwrap();
+        assert_eq!(out.text, "ok");
+        assert_eq!(out.model.as_deref(), Some("m"));
+    }
+
+    #[test]
+    fn malformed_tool_call_is_an_error_not_a_silent_drop() {
+        let item = json!({"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"task_status","arguments":"{nao-json"}});
+        let done = json!({"type":"response.completed","response":{"model":"m"}});
+        let body = format!("data: {item}\n\ndata: {done}\n\n");
+        let result = consume_sse(Cursor::new(body), None, &mut |_| {});
+        assert!(matches!(result, Err(ProviderError::Failed(m)) if m.contains("malformada")));
+    }
+
+    #[test]
+    fn assistant_history_uses_plain_content_and_user_keeps_input_text() {
+        let model = AvailableModel {
+            slug: "m".into(),
+            display_name: "M".into(),
+        };
+        let items = [
+            ChatItem::User("oi".into()),
+            ChatItem::Assistant("olá".into()),
+        ];
+        let req = TurnRequest {
+            instructions: "",
+            items: &items,
+            tools: &[],
+            model: None,
+        };
+        let payload = responses_request(&req, &model);
+        assert_eq!(payload["input"][0]["content"][0]["type"], "input_text");
+        assert_eq!(payload["input"][1]["content"], "olá");
     }
 
     #[test]

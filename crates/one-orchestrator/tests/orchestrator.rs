@@ -191,6 +191,32 @@ fn scripted_provider_has_simulated_status_not_real_connection() {
     ));
 }
 
+/// Function calling com `strict: true` exige que TODAS as propriedades estejam em `required`
+/// (opcionais viram tipo anulável). Regressão: `task_run` e `task_events` tinham campos opcionais fora
+/// de `required`, o que a Responses API rejeita em modo estrito.
+#[test]
+fn every_catalog_property_is_required_for_strict_mode() {
+    for t in catalog() {
+        let props: std::collections::BTreeSet<_> = t.parameters["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        let required: std::collections::BTreeSet<_> = t.parameters["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            props, required,
+            "{} precisa listar todas as propriedades em required",
+            t.name
+        );
+    }
+}
+
 #[test]
 fn catalog_has_strict_schemas_and_no_path_command_or_ssh_fields() {
     let forbidden = [
@@ -722,4 +748,316 @@ fn secrets_in_provider_text_are_redacted_before_storage() {
         .text
         .contains("sk-abcdefghij"));
     let _ = ErrorKind::Timeout; // contrato importado também usado em outros testes
+}
+
+/// Provedor de teste que cancela a própria geração no meio da chamada e conta as chamadas.
+struct CancellingProvider {
+    calls: std::sync::atomic::AtomicUsize,
+    flag: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl OrchestratorProvider for CancellingProvider {
+    fn id(&self) -> &'static str {
+        "cancelling"
+    }
+    fn status(&self) -> one_protocol::ProviderStatus {
+        one_protocol::ProviderStatus::Simulated {
+            provider: "cancelling".into(),
+            label: "teste".into(),
+        }
+    }
+    fn complete(
+        &self,
+        _req: &one_orchestrator::TurnRequest<'_>,
+        _sink: &mut dyn FnMut(one_orchestrator::TurnEvent),
+    ) -> Result<TurnOutput, ProviderError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        Err(ProviderError::Failed("conexão interrompida".into()))
+    }
+}
+
+#[test]
+fn cancel_before_the_turn_calls_no_provider_and_persists_only_the_user_message() {
+    let env = setup("cancel-early", &ok_body(), true, ToolPolicy::default());
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let provider = Arc::new(CancellingProvider {
+        calls: Default::default(),
+        flag: flag.clone(),
+    });
+    let orch = orchestrator(&env, provider.clone(), OrchestratorLimits::default());
+    let reply = orch
+        .send_cancellable(None, "olá", None, Some(&flag), &mut |_| {})
+        .unwrap();
+    assert_eq!(
+        reply.stopped.as_deref(),
+        Some("geração cancelada pelo usuário")
+    );
+    assert_eq!(provider.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let msgs = orch.messages(&reply.conversation_id).unwrap();
+    assert_eq!(msgs.len(), 1, "só a mensagem do usuário: {msgs:?}");
+}
+
+#[test]
+fn cancel_during_the_provider_call_stops_without_an_answer_or_retry() {
+    let env = setup("cancel-mid", &ok_body(), true, ToolPolicy::default());
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let provider = Arc::new(CancellingProvider {
+        calls: Default::default(),
+        flag: flag.clone(),
+    });
+    let orch = orchestrator(&env, provider.clone(), OrchestratorLimits::default());
+    let reply = orch
+        .send_cancellable(None, "olá", None, Some(&flag), &mut |_| {})
+        .unwrap();
+    assert_eq!(
+        reply.stopped.as_deref(),
+        Some("geração cancelada pelo usuário")
+    );
+    assert_eq!(
+        provider.calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "sem nova tentativa"
+    );
+    let msgs = orch.messages(&reply.conversation_id).unwrap();
+    assert!(msgs
+        .iter()
+        .all(|m| !matches!(m.role, one_protocol::ChatRole::Orchestrator)));
+}
+
+#[test]
+fn conversation_context_limits_task_run_to_its_gateway_workspace_and_engine() {
+    use one_protocol::{ChatContext, ExecutorPreference};
+    let env = setup("ctx", &ok_body(), true, ToolPolicy::default());
+    let conv = env
+        .store
+        .lock()
+        .unwrap()
+        .conversation_create(ChatMode::Orchestrator, "ctx")
+        .unwrap();
+    let run = |engine: &str, ws: &str| {
+        env.tools.call(
+            &conv,
+            "task_run",
+            &json!({"workspace_id": ws, "engine": engine, "model": null, "prompt": "ler in.txt", "mode": null}),
+        )
+    };
+    // escolha: workspace X e motor Codex
+    env.store
+        .lock()
+        .unwrap()
+        .chat_conversation_context_set(
+            &conv,
+            &ChatContext {
+                gateway_id: Some("local".into()),
+                workspace_id: Some("ws_outro".into()),
+                executor_engine: Some(ExecutorPreference::Codex),
+                executor_model: None,
+                orchestrator_model: None,
+            },
+        )
+        .unwrap();
+    let out = run("codex", &env.ws_id);
+    assert!(
+        !out.ok && out.kind == Some(ToolErrorKind::NotAllowed),
+        "{}",
+        out.content
+    );
+    assert!(
+        out.content.contains("workspace diferente"),
+        "{}",
+        out.content
+    );
+
+    // mesmo workspace, motor diferente do escolhido
+    env.store
+        .lock()
+        .unwrap()
+        .chat_conversation_context_set(
+            &conv,
+            &ChatContext {
+                gateway_id: Some("local".into()),
+                workspace_id: Some(env.ws_id.clone()),
+                executor_engine: Some(ExecutorPreference::Claude),
+                executor_model: None,
+                orchestrator_model: None,
+            },
+        )
+        .unwrap();
+    let out = run("codex", &env.ws_id);
+    assert!(
+        !out.ok && out.content.contains("motor diferente"),
+        "{}",
+        out.content
+    );
+
+    // gateway fora do local
+    env.store
+        .lock()
+        .unwrap()
+        .chat_conversation_context_set(
+            &conv,
+            &ChatContext {
+                gateway_id: Some("flowsharp".into()),
+                workspace_id: None,
+                executor_engine: None,
+                executor_model: None,
+                orchestrator_model: None,
+            },
+        )
+        .unwrap();
+    let out = run("codex", &env.ws_id);
+    assert!(
+        !out.ok && out.content.contains("gateway diferente"),
+        "{}",
+        out.content
+    );
+
+    // contexto compatível: a delegação passa
+    env.store
+        .lock()
+        .unwrap()
+        .chat_conversation_context_set(
+            &conv,
+            &ChatContext {
+                gateway_id: Some("local".into()),
+                workspace_id: Some(env.ws_id.clone()),
+                executor_engine: Some(ExecutorPreference::Codex),
+                executor_model: None,
+                orchestrator_model: None,
+            },
+        )
+        .unwrap();
+    let out = run("codex", &env.ws_id);
+    assert!(out.ok, "{}", out.content);
+}
+
+#[test]
+fn gateways_list_never_marks_blocked_engines_as_delegable() {
+    let env = setup("delegable", &ok_body(), true, ToolPolicy::default());
+    let out = env.tools.call("cv_qualquer", "gateways_list", &json!({}));
+    let v: Value = serde_json::from_str(&out.content).unwrap();
+    let engines = v["content"][0]["engines"]
+        .as_array()
+        .or_else(|| v["data"][0]["engines"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !engines.is_empty(),
+        "lista de motores ausente: {}",
+        out.content
+    );
+    for e in engines {
+        if e["engine"] != "codex" {
+            assert_eq!(e["delegable"], false, "{e}");
+        }
+    }
+}
+
+/// Provedor que registra o modelo recebido e responde com texto final.
+struct ModelRecorder {
+    seen: Mutex<Vec<Option<String>>>,
+}
+
+impl OrchestratorProvider for ModelRecorder {
+    fn id(&self) -> &'static str {
+        "recorder"
+    }
+    fn status(&self) -> one_protocol::ProviderStatus {
+        one_protocol::ProviderStatus::Simulated {
+            provider: "recorder".into(),
+            label: "teste".into(),
+        }
+    }
+    fn complete(
+        &self,
+        req: &one_orchestrator::TurnRequest<'_>,
+        _sink: &mut dyn FnMut(one_orchestrator::TurnEvent),
+    ) -> Result<TurnOutput, ProviderError> {
+        self.seen.lock().unwrap().push(req.model.map(String::from));
+        say("ok")
+    }
+}
+
+#[test]
+fn requested_model_reaches_the_provider_for_that_turn() {
+    let env = setup("model", &ok_body(), true, ToolPolicy::default());
+    let provider = Arc::new(ModelRecorder {
+        seen: Mutex::new(vec![]),
+    });
+    let orch = orchestrator(&env, provider.clone(), OrchestratorLimits::default());
+    let r = orch
+        .send_cancellable(None, "a", Some("modelo-x"), None, &mut |_| {})
+        .unwrap();
+    orch.send_cancellable(Some(&r.conversation_id), "b", None, None, &mut |_| {})
+        .unwrap();
+    assert_eq!(
+        *provider.seen.lock().unwrap(),
+        vec![Some("modelo-x".to_string()), None]
+    );
+}
+
+/// Provedor que, durante o próprio turno, tenta enviar outro turno para a MESMA conversa.
+struct ReentrantProvider {
+    orch: Mutex<Option<Arc<Orchestrator>>>,
+    conv: Mutex<Option<String>>,
+    inner: Mutex<Option<Result<String, String>>>,
+}
+
+impl OrchestratorProvider for ReentrantProvider {
+    fn id(&self) -> &'static str {
+        "reentrant"
+    }
+    fn status(&self) -> one_protocol::ProviderStatus {
+        one_protocol::ProviderStatus::Simulated {
+            provider: "reentrant".into(),
+            label: "teste".into(),
+        }
+    }
+    fn complete(
+        &self,
+        _req: &one_orchestrator::TurnRequest<'_>,
+        _sink: &mut dyn FnMut(one_orchestrator::TurnEvent),
+    ) -> Result<TurnOutput, ProviderError> {
+        let orch = self.orch.lock().unwrap().clone().unwrap();
+        let conv = self.conv.lock().unwrap().clone().unwrap();
+        let r = orch
+            .send(Some(&conv), "segundo")
+            .map(|_| "aceito".to_string())
+            .map_err(|e| e.to_string());
+        *self.inner.lock().unwrap() = Some(r);
+        say("primeiro")
+    }
+}
+
+#[test]
+fn second_turn_in_the_same_conversation_is_refused_while_one_is_running() {
+    let env = setup("reentrant", &ok_body(), true, ToolPolicy::default());
+    let provider = Arc::new(ReentrantProvider {
+        orch: Mutex::new(None),
+        conv: Mutex::new(None),
+        inner: Mutex::new(None),
+    });
+    let orch = Arc::new(orchestrator(
+        &env,
+        provider.clone(),
+        OrchestratorLimits::default(),
+    ));
+    let conv = env
+        .store
+        .lock()
+        .unwrap()
+        .conversation_create(ChatMode::Orchestrator, "reentrante")
+        .unwrap();
+    *provider.orch.lock().unwrap() = Some(orch.clone());
+    *provider.conv.lock().unwrap() = Some(conv.clone());
+    let reply = orch.send(Some(&conv), "primeiro").unwrap();
+    assert_eq!(reply.text.as_deref(), Some("primeiro"));
+    let inner = provider.inner.lock().unwrap().clone().unwrap();
+    assert!(
+        matches!(&inner, Err(m) if m.contains("turno em andamento")),
+        "{inner:?}"
+    );
+    // depois do turno, a conversa volta a aceitar envios
+    assert!(orch.send(Some(&conv), "terceiro").is_ok());
 }

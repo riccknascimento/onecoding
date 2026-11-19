@@ -62,30 +62,38 @@ export function ContextBar(p: Props) {
   return (
     <div className="ctx-bar" role="group" aria-label="Contexto operacional">
       <div className="ctx-group">
-        <Chip label="Gateway" title="Gateways remotos ainda não estão implementados: só “Este Mac” executa.">
-          <Sel label="Gateway" value={p.gatewayId} display={p.gateways.find((g) => g.id === p.gatewayId)?.name ?? "Nenhum disponível"} onChange={p.onGateway}>
+        <Chip
+          label="OneNode"
+          title={orchestrator ? "OneNode que executa as tarefas. “Automático” depende do roteamento do OneHub, ainda não disponível." : "OneNode que executa a tarefa. Escolha um explicitamente."}
+        >
+          <Sel label="OneNode" value={p.gatewayId} display={p.gateways.find((g) => g.id === p.gatewayId)?.name ?? (orchestrator ? "Automático · em breve" : "Selecione um OneNode")} onChange={p.onGateway}>
             {p.gatewayId === "" && (
               <option value="" disabled>
-                {p.localPhase === "loading" ? "Detectando…" : "Nenhum disponível"}
+                {p.localPhase === "loading" ? "Detectando…" : orchestrator ? "Automático · em breve" : "Selecione um OneNode"}
+              </option>
+            )}
+            {orchestrator && (
+              <option value="auto" disabled>
+                Automático · em breve
               </option>
             )}
             {p.gateways.map((g) => (
-              <option key={g.id} value={g.id} disabled={g.demo}>
+              <option key={g.id} value={g.id} disabled={g.demo || g.status !== "online"}>
                 {g.name}
-                {g.demo ? " — indisponível" : ""}
+                {g.demo || g.status !== "online" ? " — desconectado" : ""}
               </option>
             ))}
           </Sel>
         </Chip>
-        <Chip label="Workspace" title="Pasta autorizada, somente leitura." disabled={!p.workspaceEnabled}>
+        <Chip label="Projeto / Workspace" title="Pasta autorizada, somente leitura." disabled={!p.workspaceEnabled}>
           <Sel
-            label="Workspace"
+            label="Projeto / Workspace"
             value={p.workspaceId}
             display={p.workspaces.find((w) => w.id === p.workspaceId)?.label ?? "Nenhuma pasta autorizada"}
             disabled={!p.workspaceEnabled}
             onChange={(v) => (v === AUTHORIZE ? p.onAuthorize() : p.onWorkspace(v))}
           >
-            {!p.workspaceEnabled && <option value="">Indisponível sem Gateway</option>}
+            {!p.workspaceEnabled && <option value="">Indisponível sem OneNode</option>}
             {p.workspaceEnabled && p.workspaces.length === 0 && <option value="">Nenhuma pasta autorizada</option>}
             {p.workspaces.map((w) => (
               <option key={w.id} value={w.id} title={w.path}>
@@ -96,10 +104,10 @@ export function ContextBar(p: Props) {
           </Sel>
         </Chip>
         <Chip
-          label="Motor"
+          label="Motor executor"
           title={orchestrator ? "Executor preferido. “Automático” é só uma preferência futura: nada é delegado nesta etapa." : "Executor obrigatório da execução direta."}
         >
-          <Sel label="Motor" value={p.engine} display={p.engine === "auto" ? "Automático · futuro" : (ENGINES.find((e) => e.kind === p.engine)?.label ?? "")} onChange={(v) => p.onEngine(v as ExecutorPreference)}>
+          <Sel label="Motor executor" value={p.engine} display={p.engine === "auto" ? "Automático · futuro" : (ENGINES.find((e) => e.kind === p.engine)?.label ?? "")} onChange={(v) => p.onEngine(v as ExecutorPreference)}>
             {orchestrator && <option value="auto">Automático · futuro</option>}
             {ENGINES.map((e) => (
               <option key={e.kind} value={e.kind} disabled={!e.available}>
@@ -109,8 +117,8 @@ export function ContextBar(p: Props) {
             ))}
           </Sel>
         </Chip>
-        <Chip label="Modelo" title="Modelo do executor (não é o modelo do ChatGPT)." disabled={autoEngine}>
-          <Sel label="Modelo do executor" value={p.executorModel} display={p.models.find((m) => m.id === p.executorModel)?.label ?? (p.executorModel || "Padrão da CLI")} disabled={autoEngine} onChange={p.onExecutorModel}>
+        <Chip label="Modelo executor" title="Modelo do executor (não é o modelo do ChatGPT)." disabled={autoEngine}>
+          <Sel label="Modelo executor" value={p.executorModel} display={p.models.find((m) => m.id === p.executorModel)?.label ?? (p.executorModel || "Padrão da CLI")} disabled={autoEngine} onChange={p.onExecutorModel}>
             <option value="">Padrão da CLI</option>
             {p.models.map((m) => (
               <option key={m.id} value={m.id}>
@@ -123,7 +131,7 @@ export function ContextBar(p: Props) {
       </div>
       {orchestrator && (
         <div className="ctx-group ctx-orch">
-          <Chip label="ChatGPT" title="Modelo que o OneOrchestrator usa para conversar e planejar." disabled={p.chatModels.length === 0}>
+          <Chip label="Modelo ChatGPT — OneOrchestrator" title="Modelo que o OneOrchestrator usa para conversar e planejar." disabled={p.chatModels.length === 0}>
             <Sel label="Modelo do ChatGPT" value={p.chatModel} display={p.chatModels.find((m) => m.slug === p.chatModel)?.label ?? "Conecte para listar"} disabled={p.chatBusy || p.chatModels.length === 0} onChange={p.onChatModel}>
               {p.chatModels.length === 0 && <option value="">Conecte para listar</option>}
               {p.chatModels.map((m) => (

@@ -82,3 +82,25 @@ Consequência: `-s read-only` garante "não escreve", **não** "só lê o worksp
 | **Administração Autorizada** | Operações com efeito externo (instalar, migrar, publicar, produção) | Aprovação humana explícita por ação (níveis 2 e 3 de `ORCHESTRATOR.md` §10), Gateway dedicado, registro de auditoria | Somente o autorizado, uma ação por vez |
 
 Cada modo terá documento, testes de canário e fase próprios antes de ser habilitado. A ordem de entrega não está decidida.
+
+## 7. Isolamento por motor (teste real, 2026-11-18)
+
+Um teste real por motor, em workspace temporário, com um arquivo canário fora do workspace. Sem escrita.
+
+| Motor | Confinamento aplicado | Resultado do teste | Estado para execução |
+|---|---|---|---|
+| Codex | Perfil de permissão do SO (`WorkspaceOnly`); teste `os_level_profile_denies_reads_outside_the_workspace` passou sem chamada de modelo | Leitura fora do workspace negada pelo sandbox | **Liberado** (único motor de execução) |
+| Claude Code | `--restricted`, `--safe-mode`, ferramentas `Read,Grep,Glob`, `dontAsk`, sem MCP, orçamento USD 0,30 | Sem `--safe-mode`: plugins do usuário ativos. Com `--safe-mode` (verificação única autorizada): leitura fora do workspace continua negada, mas a inicialização **ainda lista os seis plugins** e 53 comandos, e nenhum evento de hook apareceu. Não é prova de que os hooks ficaram desligados. `--bare` descartaria o login do claude.ai | **Bloqueado**: verificação inconclusiva. Aguarda decisão do usuário |
+| Cursor CLI | `--mode ask --sandbox enabled --trust`, prompt por stdin | A ferramenta `read` leu o canário fora do workspace apesar de `--sandbox enabled`; hooks e skills do usuário ativos | **Bloqueado**: isolamento de leitura não verificado |
+
+Alternativas para o Cursor (investigadas sem chamada de modelo, 2026-11-18):
+- `~/.cursor/cli-config.json` do usuário tem `sandbox.mode: disabled`. A flag `--sandbox enabled` não cobriu a ferramenta de leitura, que é a que vazou. O sandbox do Cursor cobre o shell.
+- Regras `permissions.deny` com `Read(...)` no Cursor: não verificadas (exigiriam chamada real).
+- Perfil de sandbox do macOS (`sandbox-exec`, Seatbelt): **o mecanismo funciona** num processo comum. Com o caminho canônico (`/private/var`), a leitura da pasta fora do workspace foi negada e a do workspace permitida. Não se sabe se `cursor-agent` (Node) roda sob o perfil. Essa prova exige uma chamada real.
+- Docker/VM: descartados. Docker é proibido neste Mac.
+
+Consequências:
+- Nenhum motor sem isolamento de SO equivalente ao do Codex é tratado como seguro por padrão. A recusa acontece em `ExecService::start_for` antes de qualquer processo, e a detecção expõe o motivo em `EngineStatus.execution_block`.
+- `task_run` aceita somente `codex` no catálogo do orquestrador.
+- Não foi testada leitura por symlink dentro do workspace apontando para fora, em nenhum motor.
+- Os fixtures de stream (`crates/one-adapters/tests/fixtures/{claude,cursor}`) foram higienizados: ids, caminhos de usuário e e-mails substituídos. Nenhum conteúdo de arquivo é persistido; testes verificam isso.

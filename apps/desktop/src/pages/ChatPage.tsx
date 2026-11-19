@@ -104,9 +104,10 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
     () => [...(local.phase === "ready" ? [local.gateway] : []), ...DEMO_GATEWAYS],
     [local],
   );
-  // Só Gateways reais são selecionáveis; os remotos aparecem como indisponíveis.
+  // Só OneNodes reais são selecionáveis; os remotos aparecem como desconectados.
+  // No Modo Direto a escolha é explícita: sem fallback para o primeiro disponível.
   const selectable = gateways.filter((g) => !g.demo);
-  const gateway = selectable.find((g) => g.id === sel.gatewayId) ?? selectable[0];
+  const gateway = selectable.find((g) => g.id === sel.gatewayId) ?? (mode === "direct" ? undefined : selectable[0]);
   const gatewayId = gateway?.id ?? "";
 
   const engine: ExecutorPreference = mode === "direct" && sel.engine === "auto" ? "codex" : sel.engine;
@@ -141,7 +142,7 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
   // Execução real só com Gateway local, Codex instalado e aprovado.
   const realCapable = gateway?.id === "local" && engine === "codex" && engineStatus?.trust === "trusted";
   const whyNot = !gateway || gateway.demo
-    ? "Selecione “Este Mac” para executar de verdade."
+    ? "Selecione o OneNode “Este Mac” para executar de verdade."
     : engine !== "codex"
       ? "Nesta fase só o Codex CLI executa de verdade."
       : engineStatus?.trust !== "trusted"
@@ -260,9 +261,9 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
         ? "ChatGPT Plan Usage conectado. O chat não executa ferramentas nem tarefas nesta fase."
         : "Login concluído. Autorize ChatGPT Plan Usage para habilitar o provedor."
       : providerStatus?.state === "error"
-        ? "Não foi possível confirmar a conexão. O Modo Orquestrador permanece indisponível."
+        ? "Não foi possível confirmar a conexão. O VibeAgent permanece indisponível."
         : providerStatus?.state === "disconnected"
-          ? "ChatGPT não conectado. Conecte uma conta para usar o Modo Orquestrador."
+          ? "ChatGPT não conectado. Conecte uma conta para usar o VibeAgent."
           : "Consultando o estado do provedor…";
 
   const configuredProvider = providerStatus?.state === "connected"
@@ -446,13 +447,13 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
 
         <div className="thread-scroll" ref={threadRef}>
           {orchestratorMode ? (
-            <div className="thread" role="log" aria-label="Conversa do Modo Orquestrador">
+            <div className="thread" role="log" aria-label="Conversa do VibeAgent">
               {chatMessages.length === 0 && (
                 <div className="empty">
                   <span className="empty-mark" aria-hidden="true" />
                   <h3>OneOrchestrator</h3>
                   <p>{orchestratorNotice}</p>
-                  <p className="muted small">Ele conversa e planeja. A delegação de tarefas ao Gateway ainda não está disponível.</p>
+                  <p className="muted small">Ele conversa, planeja e pode delegar tarefas somente leitura ao OneNode e ao projeto escolhidos abaixo.</p>
                   {needsConnect && (
                     <button type="button" className="btn primary" onClick={() => void connectChatGpt()} disabled={providerBusy || providerStatus === null}>
                       {providerBusy ? "Aguardando navegador…" : connected ? "Autorizar ChatGPT Plan Usage" : "Conectar com ChatGPT"}
@@ -472,7 +473,7 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
               {chatError && <div className="ev bad" role="alert">{chatError}</div>}
             </div>
           ) : (
-            <div className="thread" role="log" aria-label="Conversa do Modo Direto">
+            <div className="thread" role="log" aria-label="Conversa do Coding">
               {!realCapable && (
                 <div className="empty">
                   <span className="empty-mark" aria-hidden="true" />
@@ -530,7 +531,7 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
                   </button>
                 </div>
               )}
-              <p className="mode-note">Orquestrador · Gateway, projeto e executor são só preferências desta conversa: nenhuma tarefa é delegada nesta etapa.</p>
+              <p className="mode-note">VibeAgent · OneNode, projeto e motor são preferências desta conversa e limitam as tarefas que o OneOrchestrator pode delegar.</p>
               <Composer
                 value={chatDraft}
                 onChange={setChatDraft}
@@ -543,7 +544,7 @@ export function ChatPage({ local }: { local: LocalGatewayState }) {
             </>
           ) : (
             <>
-              <p className="mode-note">Modo Direto · ChatGPT não participa desta execução.</p>
+              <p className="mode-note">Coding · ChatGPT não participa desta execução.</p>
               <Composer
                 value={draft}
                 onChange={setDraft}

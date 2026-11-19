@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use one_adapters::proc::{Limits, Outcome};
 use one_adapters::{
-    acquire, CodexAdapter, Confinement, EngineAdapter, ExecRequest, Host, ParsedSummary,
-    StreamSpec, TrustStore,
+    acquire, ClaudeAdapter, CodexAdapter, CursorAdapter, EngineAdapter, ExecRequest, Host,
+    ParsedSummary, StreamSpec, TrustStore,
 };
 use one_protocol::{
     EngineKind, ErrorKind, EventPayload, ExecMode, RunInitiator, RunStatus, StartRunRequest,
@@ -149,7 +149,11 @@ impl ExecService {
         Arc::new(Self {
             store,
             host,
-            adapters: vec![Box::new(CodexAdapter)],
+            adapters: vec![
+                Box::new(CodexAdapter),
+                Box::new(ClaudeAdapter),
+                Box::new(CursorAdapter),
+            ],
             limits,
             active: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
@@ -195,6 +199,9 @@ impl ExecService {
                 "este motor ainda não é suportado",
             ))
         })?;
+        if let Some(reason) = adapter.execution_block() {
+            return Err(blocked(err(ErrorKind::InvalidRequest, reason)));
+        }
         let prompt = req.prompt.trim();
         if prompt.is_empty() || prompt.len() > MAX_PROMPT_BYTES {
             return Err(blocked(err(
@@ -250,7 +257,7 @@ impl ExecService {
         adapter
             .args(&ExecRequest {
                 workspace: &canonical,
-                confinement: Confinement::WorkspaceOnly,
+                confinement: adapter.confinement(),
                 model: req.model.as_deref(),
                 mode: ExecMode::ReadOnly,
                 prompt,
@@ -451,8 +458,8 @@ impl ExecService {
         let adapter = self.adapter(engine).expect("adaptador validado no start");
         let args = match adapter.args(&ExecRequest {
             workspace,
-            // leitura confinada ao workspace; o modo de leitura ampla não é exposto pela UI
-            confinement: Confinement::WorkspaceOnly,
+            // confinamento que o próprio adaptador aplica; o modo de leitura ampla não é exposto pela UI
+            confinement: adapter.confinement(),
             model,
             mode: ExecMode::ReadOnly,
             prompt,

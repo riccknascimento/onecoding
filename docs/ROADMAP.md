@@ -44,3 +44,12 @@ A Fase 2A implementa o **Modo direto** com Codex. Fase 3A commitada em `13f051a`
 4. **Backlog posterior:** Claude Code e Cursor; OneContext Handoff; OneProject Discovery; OneSkills Registry; OneUsage; OneAgent Factory.
 
 Requisitos de contexto, economia de tokens, isolamento por cliente e Git por Gateway: `ORCHESTRATION-PLAN.md` §12.
+
+## Estado operacional (2026-11-18)
+
+- **Delegação**: o chat do Modo Orquestrador usa o ciclo `ChatGPT → Orchestrator → ToolRuntime → ExecService → Gateway local → Codex`. Gateway, workspace e motor vêm do contexto da conversa; `task_run` recusa qualquer outro. Escrita continua bloqueada.
+- **Erro do stream da Responses API**: um evento `error` em-stream era ignorado; agora é classificado pelo código. Catálogo com `strict: true` corrigido (todas as propriedades em `required`). Cobertos por teste de regressão.
+- **Cancelamento**: interrompe a chamada HTTP em andamento e o laço entre passos. Um turno por conversa, garantido no orquestrador.
+- **Streaming**: o chat deste modo não transmite o texto token a token. O estado `generating` mostra o andamento; a resposta final aparece ao terminar.
+- **Motores**: só Codex está liberado. Claude Code e Cursor CLI estão bloqueados (`docs/ISOLATION.md` §7).
+- **Pendente**: validação real de uma delegação pelo app (não autorizada nesta etapa).

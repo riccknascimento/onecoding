@@ -75,10 +75,12 @@ beforeEach(() => {
 describe("Chat com execução real", () => {
   it("Modo Direto sem Codex aprovado: execução desabilitada, sem conversa fictícia", async () => {
     render(<ChatPage local={local("unknown")} />);
-    expect(screen.getByRole("radio", { name: "Orquestrador" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "VibeAgent" })).toBeChecked();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("radio", { name: "Direto" }));
-    expect(screen.getByText("Modo Direto · ChatGPT não participa desta execução.")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Coding" }));
+    // Modo Direto exige OneNode escolhido explicitamente (sem escolha automática)
+    await user.selectOptions(screen.getByRole("combobox", { name: "OneNode" }), "local");
+    expect(screen.getByText("Coding · ChatGPT não participa desta execução.")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
     expect(screen.getByText(/Aprove o Codex CLI em Agent Gateways/)).toBeInTheDocument();
     expect(screen.queryByText("Orquestrador", { selector: ".msg-role" })).not.toBeInTheDocument();
@@ -88,10 +90,10 @@ describe("Chat com execução real", () => {
   it("Modo Orquestrador desconectado não encaminha mensagens ao Codex", async () => {
     const user = userEvent.setup();
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Orquestrador" }));
+    await user.click(screen.getByRole("radio", { name: "VibeAgent" }));
     expect(screen.getByText("Provedor configurado: nenhum")).toBeInTheDocument();
     expect(await screen.findByText(/Estado: desconectado/)).toBeInTheDocument();
-    expect(screen.getByText("ChatGPT não conectado. Conecte uma conta para usar o Modo Orquestrador.")).toBeInTheDocument();
+    expect(screen.getByText("ChatGPT não conectado. Conecte uma conta para usar o VibeAgent.")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
     expect(api.startRun).not.toHaveBeenCalled();
   });
@@ -137,7 +139,7 @@ describe("Chat com execução real", () => {
     vi.mocked(api.getOrchestratorStatus).mockResolvedValue(simulated);
     const user = userEvent.setup();
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Orquestrador" }));
+    await user.click(screen.getByRole("radio", { name: "VibeAgent" }));
     expect(await screen.findByText("Estado: simulado (somente testes)")).toBeInTheDocument();
     expect(screen.queryByText("Estado: conectado")).not.toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
@@ -148,7 +150,7 @@ describe("Chat com execução real", () => {
     vi.mocked(api.getOrchestratorStatus).mockRejectedValue(new Error("status offline"));
     const user = userEvent.setup();
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Orquestrador" }));
+    await user.click(screen.getByRole("radio", { name: "VibeAgent" }));
     expect(await screen.findByText("Estado: indisponível · status offline")).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeDisabled();
   });
@@ -163,7 +165,7 @@ describe("Chat com execução real", () => {
     });
     const user = userEvent.setup();
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Orquestrador" }));
+    await user.click(screen.getByRole("radio", { name: "VibeAgent" }));
     expect(await screen.findByText("Estado: conectado · ChatGPT Plus")).toBeInTheDocument();
     expect(screen.getByText("ChatGPT Plan Usage conectado. O chat não executa ferramentas nem tarefas nesta fase.")).toBeInTheDocument();
     expect(screen.getByText("Provedor configurado: ChatGPT Plan Usage · ChatGPT Plus")).toBeInTheDocument();
@@ -179,7 +181,7 @@ describe("Chat com execução real", () => {
       models: ["GPT X (gpt-x)"], plan_usage_authorized: true,
     });
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Orquestrador" }));
+    await user.click(screen.getByRole("radio", { name: "VibeAgent" }));
     await user.click(await screen.findByRole("button", { name: "Conectar com ChatGPT" }));
     expect(await screen.findByText("ChatGPT Plan Usage: autorizado")).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Modelo do ChatGPT" })).toHaveValue("gpt-x");
@@ -210,7 +212,9 @@ describe("Chat com execução real", () => {
     vi.mocked(api.listRuns).mockResolvedValue([done.run]);
 
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Direto" }));
+    await user.click(screen.getByRole("radio", { name: "Coding" }));
+    // Modo Direto exige OneNode escolhido explicitamente (sem escolha automática)
+    await user.selectOptions(screen.getByRole("combobox", { name: "OneNode" }), "local");
     const box = screen.getByRole("textbox", { name: "Mensagem" });
     await waitFor(() => expect(box).toBeEnabled());
     expect(screen.queryByText("DEMO")).not.toBeInTheDocument();
@@ -237,7 +241,9 @@ describe("Chat com execução real", () => {
     vi.mocked(api.getRun).mockResolvedValue({ run: runView(), events: [] });
     vi.mocked(api.cancelRun).mockResolvedValue(true);
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Direto" }));
+    await user.click(screen.getByRole("radio", { name: "Coding" }));
+    // Modo Direto exige OneNode escolhido explicitamente (sem escolha automática)
+    await user.selectOptions(screen.getByRole("combobox", { name: "OneNode" }), "local");
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeEnabled());
     await user.type(screen.getByRole("textbox", { name: "Mensagem" }), "x");
     await user.click(screen.getByRole("button", { name: "Enviar" }));
@@ -249,7 +255,9 @@ describe("Chat com execução real", () => {
     const user = userEvent.setup();
     vi.mocked(api.startRun).mockRejectedValue("o executável mudou desde a aprovação; valide de novo em Agent Gateways");
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Direto" }));
+    await user.click(screen.getByRole("radio", { name: "Coding" }));
+    // Modo Direto exige OneNode escolhido explicitamente (sem escolha automática)
+    await user.selectOptions(screen.getByRole("combobox", { name: "OneNode" }), "local");
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeEnabled());
     await user.type(screen.getByRole("textbox", { name: "Mensagem" }), "x");
     await user.click(screen.getByRole("button", { name: "Enviar" }));
@@ -265,7 +273,9 @@ describe("Chat com execução real", () => {
       events: [ev(1, { type: "error", kind: "executor_failed", message: "model not supported" })],
     });
     render(<ChatPage local={local("trusted")} />);
-    await user.click(screen.getByRole("radio", { name: "Direto" }));
+    await user.click(screen.getByRole("radio", { name: "Coding" }));
+    // Modo Direto exige OneNode escolhido explicitamente (sem escolha automática)
+    await user.selectOptions(screen.getByRole("combobox", { name: "OneNode" }), "local");
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Mensagem" })).toBeEnabled());
     await user.type(screen.getByRole("textbox", { name: "Mensagem" }), "x");
     await user.click(screen.getByRole("button", { name: "Enviar" }));
@@ -280,13 +290,15 @@ describe("Chat com execução real", () => {
       models: ["GPT test (gpt-test)"], plan_usage_authorized: true,
     });
     render(<ChatPage local={local("trusted")} />);
-    for (const name of ["Gateway", "Workspace", "Motor", "Modelo do executor"]) {
+    for (const name of ["OneNode", "Projeto / Workspace", "Motor executor", "Modelo executor"]) {
       expect(await screen.findByRole("combobox", { name })).toBeInTheDocument();
     }
     expect(screen.getByRole("combobox", { name: "Modelo do ChatGPT" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Automático · futuro" })).toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: "Direto" }));
-    for (const name of ["Gateway", "Workspace", "Motor", "Modelo do executor"]) {
+    await user.click(screen.getByRole("radio", { name: "Coding" }));
+    // Modo Direto exige OneNode escolhido explicitamente (sem escolha automática)
+    await user.selectOptions(screen.getByRole("combobox", { name: "OneNode" }), "local");
+    for (const name of ["OneNode", "Projeto / Workspace", "Motor executor", "Modelo executor"]) {
       expect(screen.getByRole("combobox", { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole("combobox", { name: "Modelo do ChatGPT" })).not.toBeInTheDocument();
@@ -295,7 +307,7 @@ describe("Chat com execução real", () => {
 
   it("não apresenta Gateway remoto, Claude Code nem Cursor como disponíveis", async () => {
     render(<ChatPage local={local("trusted")} />);
-    expect(await screen.findByRole("option", { name: "Apliflow (demo) — indisponível" })).toBeDisabled();
+    expect(await screen.findByRole("option", { name: "Apliflow (demo) — desconectado" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Claude Code — indisponível" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Cursor CLI — indisponível" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Codex CLI" })).toBeEnabled();
@@ -310,7 +322,7 @@ describe("Chat com execução real", () => {
     vi.mocked(api.listChatConversations).mockResolvedValue([{ id: "cv1", title: "Plano", provider: "chatgpt_plan", model: "gpt-test", state: "idle", updatedAt: "2026-11-17T12:00:00Z", context: NO_CONTEXT }]);
     render(<ChatPage local={local("trusted")} />);
     await screen.findByText("Plano", { selector: ".chat-title" });
-    await user.selectOptions(screen.getByRole("combobox", { name: "Motor" }), "auto");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Motor executor" }), "auto");
     await waitFor(() => expect(api.setChatConversationContext).toHaveBeenCalledWith("cv1", {
       gatewayId: "local", workspaceId: "ws1", executorEngine: "auto", executorModel: null, orchestratorModel: "gpt-test",
     }));
@@ -332,10 +344,10 @@ describe("Chat com execução real", () => {
     ]);
     render(<ChatPage local={local("trusted")} />);
     await user.click(await screen.findByRole("button", { name: /Com contexto/ }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "Workspace" })).toHaveValue("ws2"));
-    expect(screen.getByRole("combobox", { name: "Motor" })).toHaveValue("auto");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Projeto / Workspace" })).toHaveValue("ws2"));
+    expect(screen.getByRole("combobox", { name: "Motor executor" })).toHaveValue("auto");
     expect(screen.getByRole("combobox", { name: "Modelo do ChatGPT" })).toHaveValue("gpt-b");
-    expect(screen.getByRole("combobox", { name: "Gateway" })).toHaveValue("local");
+    expect(screen.getByRole("combobox", { name: "OneNode" })).toHaveValue("local");
   });
 
   it("o histórico único identifica o modo de cada item e abrir uma execução leva ao Modo Direto", async () => {
@@ -348,11 +360,11 @@ describe("Chat com execução real", () => {
     const rail = await screen.findByLabelText("Histórico de conversas e execuções");
     expect(await within(rail).findByText("Plano salvo")).toBeInTheDocument();
     expect(within(rail).getByText("Resuma o projeto")).toBeInTheDocument();
-    expect(within(rail).getByText("Orquestrador")).toBeInTheDocument();
-    expect(within(rail).getByText("Direto")).toBeInTheDocument();
+    expect(within(rail).getByText("VibeAgent")).toBeInTheDocument();
+    expect(within(rail).getByText("Coding")).toBeInTheDocument();
     await user.click(within(rail).getByRole("button", { name: /Resuma o projeto/ }));
-    expect(screen.getByRole("radio", { name: "Direto" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Coding" })).toBeChecked();
     expect(await screen.findByText("Resposta da execução.")).toBeInTheDocument();
-    expect(screen.getByText("Modo Direto · ChatGPT não participa desta execução.")).toBeInTheDocument();
+    expect(screen.getByText("Coding · ChatGPT não participa desta execução.")).toBeInTheDocument();
   });
 });

@@ -3,8 +3,8 @@ import type { ChatMode, ProviderStatus } from "../contracts";
 import { Icon } from "../icons";
 
 const MODES: { id: ChatMode; label: string; hint: string }[] = [
-  { id: "orchestrator", label: "Orquestrador", hint: "Converse com o OneOrchestrator (ChatGPT), que planeja e, no futuro, delega ao Gateway." },
-  { id: "direct", label: "Direto", hint: "Execute no Gateway sem o ChatGPT." },
+  { id: "orchestrator", label: "VibeAgent", hint: "O OneOrchestrator coordena a solicitação e delega tarefas ao OneExecutor autorizado." },
+  { id: "direct", label: "Coding", hint: "Escolha diretamente o motor e execute no OneNode selecionado." },
 ];
 
 function pill(status: ProviderStatus | null): { tone: "ok" | "warn" | "bad" | "muted"; text: string } {

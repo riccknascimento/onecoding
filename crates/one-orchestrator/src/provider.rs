@@ -38,6 +38,8 @@ pub struct TurnRequest<'a> {
     pub instructions: &'a str,
     pub items: &'a [ChatItem],
     pub tools: &'a [ToolSpec],
+    /// Modelo escolhido pelo usuário; `None` = padrão do provedor.
+    pub model: Option<&'a str>,
 }
 
 /// Eventos incrementais (streaming) de um turno.
@@ -89,6 +91,18 @@ pub trait OrchestratorProvider: Send + Sync {
         req: &TurnRequest<'_>,
         sink: &mut dyn FnMut(TurnEvent),
     ) -> Result<TurnOutput, ProviderError>;
+
+    /// Igual a `complete`, mas interrompível. Provedor que não sabe cancelar deve manter o padrão: o laço
+    /// do orquestrador checa o cancelamento entre passos.
+    fn complete_cancellable(
+        &self,
+        req: &TurnRequest<'_>,
+        cancelled: Option<&std::sync::atomic::AtomicBool>,
+        sink: &mut dyn FnMut(TurnEvent),
+    ) -> Result<TurnOutput, ProviderError> {
+        let _ = cancelled;
+        self.complete(req, sink)
+    }
 }
 
 /// O único provedor registrado no app até a Etapa 3B: sempre desconectado, nunca responde.

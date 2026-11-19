@@ -14,7 +14,7 @@ A Fase 2A entregou o **Modo direto** (usuário → OneHub → Gateway → Codex)
 | Componente | Estado | Observação |
 |---|---|---|
 | OneAgent.app (Tauri, 7 seções, ACL por comando, CSP) | **Feito** | Chat hoje só executa em Modo direto; o resto é demonstração marcada |
-| OneHub: persistência (V4 nas alterações locais), aprovação de executáveis, workspaces autorizados, auditoria | **Implementação local** | Falta política central por Gateway e fluxo de aprovação para ações sensíveis |
+| OneHub: persistência (SQLite V6), aprovação de executáveis, workspaces autorizados, auditoria | **Implementação local** | Falta política central por Gateway e fluxo de aprovação para ações sensíveis |
 | Gateway local + Codex (execução real, leitura confinada, cancelamento, métricas) | **Feito**, validação manual pendente | Sem binário de Gateway separado; roda dentro do app |
 | Contrato de motor (`EngineAdapter`/`EngineParser`) | **Feito** (só Codex) | Claude e Cursor ausentes |
 | OneOrchestrator (provedor, loop de ferramentas, conversa) | **Base 3A commitada; integração SIWC 3B local** | OAuth PKCE, Keychain, renovação/revogação, catálogo OAuth; primeira chamada Responses aguarda autorização |

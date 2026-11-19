@@ -133,6 +133,40 @@ impl Store {
         Ok(n == 1)
     }
 
+    /// Contexto operacional guardado da conversa (preferências, nunca permissões).
+    pub fn chat_conversation_context_get(&self, id: &str) -> Result<ChatContext> {
+        Ok(self.conn.query_row(
+            "SELECT ctx_gateway_id,ctx_workspace_id,ctx_executor_engine,ctx_executor_model,ctx_orchestrator_model FROM conversations WHERE id=?1",
+            params![id],
+            |r| {
+                let engine: Option<String> = r.get(2)?;
+                Ok(ChatContext {
+                    gateway_id: r.get(0)?,
+                    workspace_id: r.get(1)?,
+                    executor_engine: match engine.as_deref() {
+                        Some("codex") => Some(ExecutorPreference::Codex),
+                        Some("claude") => Some(ExecutorPreference::Claude),
+                        Some("cursor") => Some(ExecutorPreference::Cursor),
+                        Some("auto") => Some(ExecutorPreference::Auto),
+                        _ => None,
+                    },
+                    executor_model: r.get(3)?,
+                    orchestrator_model: r.get(4)?,
+                })
+            },
+        )?)
+    }
+
+    /// Estado de geração (`idle` | `generating` | `error`) só de conversas do modo orquestrador.
+    /// `false` se a conversa não existe ou não é do orquestrador: nada é alterado.
+    pub fn chat_conversation_state_set(&self, id: &str, state: &str) -> Result<bool> {
+        let n = self.conn.execute(
+            "UPDATE conversations SET state=?2 WHERE id=?1 AND mode='orchestrator'",
+            params![id, state],
+        )?;
+        Ok(n == 1)
+    }
+
     pub fn chat_conversation_create(&self) -> Result<String> {
         self.conversation_create(ChatMode::Orchestrator, "Nova conversa")
     }

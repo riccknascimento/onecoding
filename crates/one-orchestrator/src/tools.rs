@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex};
 use one_adapters::engine::{redact, truncate};
 use one_adapters::Host;
 use one_exec::{ExecService, RunOrigin, StoreTrust, LOCAL_GATEWAY};
-use one_protocol::{EngineKind, EventPayload, ExecMode, RunView, StartRunRequest, TrustState};
+use one_protocol::{
+    EngineKind, EventPayload, ExecMode, ExecutorPreference, RunView, StartRunRequest, TrustState,
+};
 use one_store::Store;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -116,9 +118,9 @@ pub fn catalog() -> Vec<ToolSpec> {
                     "engine": {"type": "string", "enum": ["codex"]},
                     "model": {"type": ["string", "null"], "description": "modelo; null = padrão da CLI"},
                     "prompt": {"type": "string", "description": "a tarefa, em texto"},
-                    "mode": {"type": "string", "enum": ["read_only"]}
+                    "mode": {"type": ["string", "null"], "enum": ["read_only", null], "description": "somente read_only; null = read_only"}
                 }),
-                &["workspace_id", "engine", "prompt"],
+                &["workspace_id", "engine", "model", "prompt", "mode"],
             ),
         },
         ToolSpec {
@@ -131,7 +133,7 @@ pub fn catalog() -> Vec<ToolSpec> {
             description: "Eventos de uma execução iniciada nesta conversa, a partir de after_seq (máx. 50).",
             parameters: schema(
                 json!({"run_id": {"type": "string"}, "after_seq": {"type": ["integer", "null"]}}),
-                &["run_id"],
+                &["run_id", "after_seq"],
             ),
         },
         ToolSpec {
@@ -140,6 +142,16 @@ pub fn catalog() -> Vec<ToolSpec> {
             parameters: schema(json!({"run_id": {"type": "string"}}), &["run_id"]),
         },
     ]
+}
+
+/// `Auto` (ou ausência de escolha) aceita qualquer motor; qualquer outra escolha é exata.
+fn engine_matches(pref: Option<ExecutorPreference>, engine: EngineKind) -> bool {
+    match pref {
+        None | Some(ExecutorPreference::Auto) => true,
+        Some(ExecutorPreference::Codex) => engine == EngineKind::Codex,
+        Some(ExecutorPreference::Claude) => engine == EngineKind::Claude,
+        Some(ExecutorPreference::Cursor) => engine == EngineKind::Cursor,
+    }
 }
 
 fn fail(kind: ToolErrorKind, message: &str) -> ToolOutcome {
@@ -253,7 +265,9 @@ impl ToolRuntime {
                     "engine": e.engine,
                     "installed": e.installed,
                     "trust": e.trust,
-                    "delegable": e.engine == EngineKind::Codex && e.trust == TrustState::Trusted,
+                    "delegable": e.engine == EngineKind::Codex
+                        && e.trust == TrustState::Trusted
+                        && e.execution_block.is_none(),
                 })
             })
             .collect();
@@ -281,6 +295,42 @@ impl ToolRuntime {
             return fail(
                 ToolErrorKind::ApprovalRequired,
                 "escrita exige aprovação humana, que ainda não está disponível; nada foi executado",
+            );
+        }
+        // Gateway, workspace e motor vêm do contexto escolhido na conversa: o modelo não os troca.
+        let ctx = match self.store().chat_conversation_context_get(conversation_id) {
+            Ok(c) => c,
+            Err(_) => {
+                return fail(
+                    ToolErrorKind::NotAllowed,
+                    "contexto da conversa indisponível",
+                )
+            }
+        };
+        if ctx
+            .gateway_id
+            .as_deref()
+            .is_some_and(|g| g != LOCAL_GATEWAY)
+        {
+            return fail(
+                ToolErrorKind::NotAllowed,
+                "gateway diferente do escolhido nesta conversa",
+            );
+        }
+        if ctx
+            .workspace_id
+            .as_deref()
+            .is_some_and(|w| w != a.workspace_id)
+        {
+            return fail(
+                ToolErrorKind::NotAllowed,
+                "workspace diferente do escolhido nesta conversa",
+            );
+        }
+        if !engine_matches(ctx.executor_engine, a.engine) {
+            return fail(
+                ToolErrorKind::NotAllowed,
+                "motor diferente do escolhido nesta conversa",
             );
         }
         let runs = self

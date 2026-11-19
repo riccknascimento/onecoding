@@ -62,7 +62,7 @@ export function HistoryRail({ conversations, runs, activeKey, conversationsLocke
                   >
                     <span className="rail-title">{it.title}</span>
                     <span className="rail-meta">
-                      <span className={`mode-tag ${it.kind === "conversation" ? "orch" : "direct"}`}>{it.kind === "conversation" ? "Orquestrador" : "Direto"}</span>
+                      <span className={`mode-tag ${it.kind === "conversation" ? "orch" : "direct"}`}>{it.kind === "conversation" ? "VibeAgent" : "Coding"}</span>
                       {it.kind === "run" ? (
                         <>
                           <span className="rail-ws">{it.run.workspace_label}</span>

@@ -1,6 +1,8 @@
 //! Laço de turno do OneOrchestrator: provedor → ferramentas do Hub → provedor, com limites.
 //! O Hub guarda o histórico e decide tudo; o provedor só devolve texto e pedidos de ferramenta.
 
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use one_adapters::engine::{redact, truncate};
@@ -8,7 +10,9 @@ use one_protocol::{ChatMessage, ChatMode, ChatRole, OrchestratorReply, ProviderS
 use one_store::Store;
 use serde_json::json;
 
-use crate::provider::{ChatItem, OrchestratorProvider, ProviderError, ToolCall, TurnRequest};
+use crate::provider::{
+    ChatItem, OrchestratorProvider, ProviderError, ToolCall, TurnEvent, TurnRequest,
+};
 use crate::tools::{catalog, ToolRuntime};
 
 /// Regras fixas do orquestrador (resumo do prompt de `docs/ORCHESTRATOR.md` §3). Política real não
@@ -61,6 +65,21 @@ pub struct Orchestrator {
     tools: Arc<ToolRuntime>,
     store: Arc<Mutex<Store>>,
     limits: OrchestratorLimits,
+    /// Conversas com um turno em andamento (no máximo um por conversa).
+    in_flight: Mutex<HashSet<String>>,
+}
+
+/// Libera a conversa ao fim do turno, inclusive em erro ou cancelamento.
+struct TurnGuard<'a> {
+    in_flight: &'a Mutex<HashSet<String>>,
+    conv: String,
+}
+
+impl Drop for TurnGuard<'_> {
+    fn drop(&mut self) {
+        let mut busy = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        busy.remove(&self.conv);
+    }
 }
 
 const MAX_TEXT_BYTES: usize = 16 * 1024;
@@ -77,6 +96,7 @@ impl Orchestrator {
             tools,
             store,
             limits,
+            in_flight: Mutex::new(HashSet::new()),
         }
     }
 
@@ -102,11 +122,25 @@ impl Orchestrator {
         );
     }
 
-    /// Um turno do usuário no Modo Orquestrador.
+    /// Um turno do usuário no Modo Orquestrador, sem cancelamento externo.
     pub fn send(
         &self,
         conversation_id: Option<&str>,
         text: &str,
+    ) -> Result<OrchestratorReply, OrchestratorError> {
+        self.send_cancellable(conversation_id, text, None, None, &mut |_| {})
+    }
+
+    /// Igual a `send`, com modelo escolhido, cancelamento (checado entre passos e dentro da chamada ao
+    /// provedor) e eventos do provedor em `sink`. Só um turno por conversa: um segundo envio concorrente
+    /// é recusado aqui, não só na interface.
+    pub fn send_cancellable(
+        &self,
+        conversation_id: Option<&str>,
+        text: &str,
+        model: Option<&str>,
+        cancelled: Option<&AtomicBool>,
+        sink: &mut dyn FnMut(TurnEvent),
     ) -> Result<OrchestratorReply, OrchestratorError> {
         match self.provider.status() {
             ProviderStatus::Connected { .. } | ProviderStatus::Simulated { .. } => {}
@@ -139,6 +173,7 @@ impl Orchestrator {
                 .conversation_create(ChatMode::Orchestrator, text)
                 .map_err(|e| OrchestratorError::Store(e.to_string()))?,
         };
+        let _turn = self.begin_turn(&conv)?;
         self.store()
             .message_append(&conv, ChatRole::User, text)
             .map_err(|e| OrchestratorError::Store(e.to_string()))?;
@@ -162,16 +197,26 @@ impl Orchestrator {
         };
 
         while steps < self.limits.max_steps {
+            if cancelled.is_some_and(|c| c.load(Ordering::Acquire)) {
+                self.record(&conv, "cancelled", json!({"at_step": steps + 1}));
+                return Ok(stop(steps, calls, "geração cancelada pelo usuário"));
+            }
             steps += 1;
-            let out = match self.provider.complete(
+            let out = match self.provider.complete_cancellable(
                 &TurnRequest {
                     instructions: DEFAULT_INSTRUCTIONS,
                     items: &items,
                     tools: &specs,
+                    model,
                 },
-                &mut |_| {},
+                cancelled,
+                &mut |e| sink(e),
             ) {
                 Ok(o) => o,
+                Err(_) if cancelled.is_some_and(|c| c.load(Ordering::Acquire)) => {
+                    self.record(&conv, "cancelled", json!({"at_step": steps}));
+                    return Ok(stop(steps, calls, "geração cancelada pelo usuário"));
+                }
                 Err(e) => {
                     self.record(&conv, "provider_error", json!({"message": e.message()}));
                     let msg = match &e {
@@ -227,6 +272,20 @@ impl Orchestrator {
             json!({"limit": "steps", "max": self.limits.max_steps}),
         );
         Ok(stop(steps, calls, "limite de passos atingido"))
+    }
+
+    /// Reserva o turno da conversa; o guarda libera ao sair, mesmo em erro.
+    fn begin_turn(&self, conv: &str) -> Result<TurnGuard<'_>, OrchestratorError> {
+        let mut busy = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+        if !busy.insert(conv.to_string()) {
+            return Err(OrchestratorError::InvalidRequest(
+                "já existe um turno em andamento nesta conversa".into(),
+            ));
+        }
+        Ok(TurnGuard {
+            in_flight: &self.in_flight,
+            conv: conv.to_string(),
+        })
     }
 
     fn run_tool(&self, conv: &str, call: &ToolCall, items: &mut Vec<ChatItem>) {
