@@ -44,26 +44,6 @@ export function Sidebar(p: SidebarProps) {
       <div className="rail-head">
         <span className="brand">OneCoding</span>
       </div>
-      <nav aria-label="Módulos">
-        <ul className="nav-list">
-          {items.map((i) => {
-            const active = p.view === i.view;
-            return (
-              <li key={i.view}>
-                <button
-                  type="button"
-                  className={`rail-item nav-item${active ? " active" : ""}`}
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => p.onView(i.view)}
-                >
-                  <Icon name={i.icon} />
-                  <span className="rail-title">{i.label}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </nav>
       <section className="rail-section" aria-label="Conversas">
         <div className="rail-section-head">
           <h3>Conversas</h3>
@@ -90,6 +70,26 @@ export function Sidebar(p: SidebarProps) {
           </ul>
         )}
       </section>
+      <nav aria-label="Módulos" className="rail-nav">
+        <ul className="nav-list">
+          {items.map((i) => {
+            const active = p.view === i.view;
+            return (
+              <li key={i.view}>
+                <button
+                  type="button"
+                  className={`rail-item nav-item${active ? " active" : ""}`}
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => p.onView(i.view)}
+                >
+                  <Icon name={i.icon} />
+                  <span className="rail-title">{i.label}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </nav>
       <div className="rail-foot">
         <span className="muted small" title={p.email}>{p.email}</span>
         <button type="button" className="btn" onClick={p.onLogout}>Sair</button>

@@ -157,7 +157,8 @@ body { margin: 0; }
 .nav-item { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; text-align: left; }
 .nav-item svg { width: 18px; height: 18px; flex: none; }
 .nav-item.active { background: var(--accent-soft); color: var(--text); box-shadow: inset 2px 0 0 var(--accent); }
-.rail-section { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-top: 14px; padding: 10px 6px 0; border-top: 1px solid var(--border); }
+.rail-section { flex: 0 1 auto; min-height: 0; max-height: 40vh; overflow-y: auto; margin-top: 8px; padding: 8px 6px 10px; border-bottom: 1px solid var(--border); }
+.rail-nav { margin-top: 10px; }
 .rail-section-head { display: flex; justify-content: space-between; align-items: center; padding: 0 4px 4px; }
 .rail-section h3 { margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .rail-section ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }

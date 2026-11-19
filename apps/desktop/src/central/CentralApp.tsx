@@ -71,7 +71,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState(false);
-  const [view, setView] = useState<CentralView>("chat");
+  const [view, setView] = useState<CentralView>(() => (window.location.pathname.startsWith("/configuracoes") ? "settings" : "chat"));
 
 
   const refreshLists = useCallback(async () => {
@@ -333,6 +333,12 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
         open={drawer}
         onView={(v) => {
           setError(null);
+          // cada área de configurações tem endereço próprio; sair dela volta para a raiz
+          if (v === "settings") {
+            if (!window.location.pathname.startsWith("/configuracoes")) window.history.pushState({}, "", "/configuracoes/OneNodes");
+          } else if (window.location.pathname.startsWith("/configuracoes")) {
+            window.history.pushState({}, "", "/");
+          }
           setView(v);
           setDrawer(false);
         }}

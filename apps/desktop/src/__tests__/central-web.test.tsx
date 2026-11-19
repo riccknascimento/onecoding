@@ -390,7 +390,8 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     render(<CentralApp transport={t} />);
     await user.click(await screen.findByRole("button", { name: "Configurações" }));
     expect(await screen.findByRole("heading", { name: "OneNodes" })).toBeInTheDocument();
-    expect(await screen.findByText("OneHub Central")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/configuracoes/OneNodes");
+    await user.click(screen.getByRole("button", { name: "Adicionar OneNode" }));
     await user.type(screen.getByLabelText("Nome do OneNode"), "Servidor novo");
     await user.click(screen.getByRole("button", { name: "Gerar código do OneNode" }));
     expect(t.createNode).toHaveBeenCalledWith("Servidor novo");
