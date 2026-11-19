@@ -4,5 +4,6 @@ dist/
 .tmp/
 .DS_Store
 *.log
+.worktrees/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/target/
