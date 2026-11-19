@@ -154,6 +154,16 @@ afterEach(() => {
 });
 
 describe("OneAgent Web (OneHub Central): tela", () => {
+  it("separa a marca à esquerda e o acesso à direita no login", async () => {
+    render(<CentralApp transport={fakeTransport()} />);
+    const main = screen.getByRole("main");
+    const brand = await screen.findByRole("region", { name: "Marca OneCoding" });
+    const access = screen.getByRole("region", { name: "Acesso ao OneCoding" });
+    expect(main.querySelector(".central-login-banner")).not.toBeNull();
+    expect(access.querySelector("form")).toHaveAccessibleName("Entrar no OneHub Central");
+    expect(Array.from(main.children)).toEqual([brand, access]);
+  });
+
   it("login recusado mostra mensagem genérica", async () => {
     const t = fakeTransport({ login: vi.fn(async () => { throw new OneHubError(401, "unauthorized"); }) });
     await login(t);

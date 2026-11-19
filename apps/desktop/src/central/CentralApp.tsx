@@ -1,5 +1,6 @@
 // Interface Web do OneAgent (OneHub Central). Conversa, execução e estados vêm de eventos reais do OneHub.
 import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import { OneHubError, webTransport } from "../transport";
 import type { CentralConversation, CentralExecutor, CentralGrant, CentralNode, CentralUser, OneHubTransport, StreamStatus, Subscription } from "../transport";
 import { Composer } from "../chat/Composer";
@@ -52,6 +53,19 @@ function errorText(e: unknown): string {
 
 function isUnauthorized(e: unknown): boolean {
   return e instanceof OneHubError && e.status === 401;
+}
+
+function LoginLayout({ children }: { children: ReactNode }) {
+  return (
+    <main className="central-login">
+      <section className="central-login-brand" aria-label="Marca OneCoding">
+        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      </section>
+      <section className="central-login-panel" aria-label="Acesso ao OneCoding">
+        {children}
+      </section>
+    </main>
+  );
 }
 
 export function CentralApp({ transport = webTransport }: { transport?: OneHubTransport }) {
@@ -417,29 +431,27 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
 
   if (booting) {
     return (
-      <main className="central-login">
-        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      <LoginLayout>
         <p className="muted">Carregando…</p>
-      </main>
+      </LoginLayout>
     );
   }
 
   if (bootError && !user) {
     return (
-      <main className="central-login">
-        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      <LoginLayout>
         <p role="alert" className="error">OneHub Central indisponível. Verifique a conexão.</p>
         <button type="button" className="btn primary" onClick={() => setBootAttempt((n) => n + 1)}>
           Tentar de novo
         </button>
-      </main>
+      </LoginLayout>
     );
   }
 
   if (!user) {
     return (
-      <main className="central-login">
-        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      <LoginLayout>
+        <h1>Entrar</h1>
         <p className="muted">Entre no OneCoding para conversar e acompanhar execuções nos seus OneNodes.</p>
         <form onSubmit={submitLogin} aria-label="Entrar no OneHub Central">
           <label>
@@ -455,7 +467,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
           </button>
         </form>
         {error && <p role="alert" className="error">{error}</p>}
-      </main>
+      </LoginLayout>
     );
   }
 
