@@ -3153,11 +3153,8 @@ dependencies = [
  "getrandom 0.4.3",
  "jsonwebtoken",
  "keyring",
- "one-adapters",
- "one-exec",
  "one-orchestrator",
  "one-protocol",
- "one-store",
  "reqwest",
  "serde",
  "serde_json",
@@ -3181,6 +3178,7 @@ name = "one-executor"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "libc",
  "one-adapters",
  "one-central",
  "one-exec",
