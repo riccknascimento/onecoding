@@ -1,9 +1,11 @@
 //! OneRegistry: catálogo validado e busca progressiva. Contratos de escopo, classificação de documentos e
 //! varredura de segredos ficam em módulos próprios. Nenhum módulo deste crate faz I/O.
 
+pub mod agent;
+pub mod delegation;
 pub mod entry;
-pub mod scope;
 pub mod sanitize;
+pub mod scope;
 pub mod source;
 
 use std::collections::HashSet;
@@ -75,6 +77,34 @@ impl Registry {
     }
 }
 
+/// Caminho mínimo do OneOrchestrator: seleciona o agente pela intenção, carrega as instruções só para ele
+/// e planeja a delegação com os fatos verificados. Não executa nada.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Orchestration {
+    pub delegation: Option<delegation::Delegation>,
+    pub instructions: Option<&'static str>,
+    /// Quando nenhum agente casa a intenção, o orquestrador responde isso em vez de inventar um especialista.
+    pub no_agent_reason: Option<String>,
+}
+
+pub fn orchestrate(agents: &agent::AgentRegistry, intent: &str, env: &delegation::Environment) -> Orchestration {
+    match agents.select(intent) {
+        None => Orchestration {
+            delegation: None,
+            instructions: None,
+            no_agent_reason: Some("Nenhum agente cadastrado corresponde a esta intenção.".into()),
+        },
+        Some(spec) => {
+            let instructions = agents.instructions(&spec.id);
+            Orchestration {
+                delegation: Some(delegation::plan(spec, intent, env)),
+                instructions,
+                no_agent_reason: None,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,5 +158,25 @@ mod tests {
         assert_eq!(Registry::from_json(ok).unwrap().len(), 1);
         let secret_perm = r#"[{"id":"x-tool","kind":"tool","version":"1.0.0","description":"d","permissions":["secrets"]}]"#;
         assert!(Registry::from_json(secret_perm).is_err(), "segredo não é permissão de catálogo");
+    }
+
+    #[test]
+    fn orchestrate_selects_loads_and_blocks_honestly_without_an_engine() {
+        use crate::agent::{builtin, AgentRegistry};
+        use crate::delegation::{EngineState, Environment, Status};
+        let reg = AgentRegistry::new(builtin()).unwrap();
+        let env = Environment {
+            engines: vec![EngineState { name: "codex".into(), installed: true, authenticated: false, approved: true }],
+            tools_available: vec!["onehub-node-admin".into(), "provisioner-install".into()],
+            effective_permissions: vec![Permission::Network],
+        };
+        let o = orchestrate(&reg, "quero adicionar uma VPS", &env);
+        let d = o.delegation.expect("há agente para a intenção");
+        assert_eq!(d.agent_id, "onenode-configuration");
+        assert!(matches!(d.status, Status::Blocked { .. }), "sem motor autenticado, não há execução");
+        assert!(o.instructions.unwrap().contains("Critérios de aceite"));
+        let none = orchestrate(&reg, "corrija o login do ERP", &env);
+        assert!(none.delegation.is_none() && none.instructions.is_none());
+        assert!(none.no_agent_reason.unwrap().contains("Nenhum agente"));
     }
 }
