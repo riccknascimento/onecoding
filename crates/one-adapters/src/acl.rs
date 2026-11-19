@@ -83,9 +83,99 @@ pub fn allows_write(path: &Path) -> Result<bool, String> {
     Ok(found)
 }
 
-/// Outras plataformas: ainda sem verificação (Linux usa ACLs POSIX; entra na fase do Gateway Linux).
-/// Falha fechada: sem verificação, o executável não é aprovável.
-#[cfg(not(target_os = "macos"))]
+/// Linux: ACLs POSIX ficam nos atributos estendidos do kernel (`system.posix_acl_access` e
+/// `system.posix_acl_default`). Sem atributo = sem ACL; atributo ilegível = reprova (falha fechada).
+#[cfg(target_os = "linux")]
+pub fn allows_write(path: &Path) -> Result<bool, String> {
+    use std::ffi::{c_void, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    let c = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "caminho com byte nulo".to_string())?;
+    for name in ["system.posix_acl_access", "system.posix_acl_default"] {
+        let n = CString::new(name).expect("nome fixo");
+        let mut buf = vec![0u8; 4096];
+        // SAFETY: `c` e `n` são strings C válidas durante a chamada; `buf` tem o tamanho informado.
+        let len = unsafe { libc::getxattr(c.as_ptr(), n.as_ptr(), buf.as_mut_ptr() as *mut c_void, buf.len()) };
+        if len < 0 {
+            return match std::io::Error::last_os_error().raw_os_error() {
+                // sem esse atributo, ou sistema de arquivos sem ACL: nada a conceder
+                Some(e) if e == libc::ENODATA || e == libc::ENOTSUP => continue,
+                Some(libc::ERANGE) => Err(format!("ACL de {} grande demais para verificar", path.display())),
+                other => Err(format!("não foi possível ler a ACL de {} (errno {other:?})", path.display())),
+            };
+        }
+        if grants_write(&buf[..len as usize])? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Interpreta o formato POSIX ACL v2 do kernel Linux (cabeçalho de 4 bytes; entradas de 8 bytes, little-endian).
+/// Concede escrita quando uma entrada nomeada de usuário (0x02), de grupo (0x08) ou "outros" (0x20) tem escrita.
+/// As entradas do dono (0x01) e do grupo dono (0x04) são julgadas pelos bits de modo, já verificados.
+pub fn grants_write(acl: &[u8]) -> Result<bool, String> {
+    const WRITE: u16 = 0x2;
+    const NAMED_USER: u16 = 0x02;
+    const NAMED_GROUP: u16 = 0x08;
+    const OTHER: u16 = 0x20;
+    if acl.len() < 4 || (acl.len() - 4) % 8 != 0 {
+        return Err("ACL malformada".into());
+    }
+    if u32::from_le_bytes([acl[0], acl[1], acl[2], acl[3]]) != 2 {
+        return Err("versão de ACL desconhecida".into());
+    }
+    for e in acl[4..].chunks_exact(8) {
+        let tag = u16::from_le_bytes([e[0], e[1]]);
+        let perm = u16::from_le_bytes([e[2], e[3]]);
+        if matches!(tag, NAMED_USER | NAMED_GROUP | OTHER) && perm & WRITE != 0 {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Outras plataformas: sem verificação. Falha fechada: o executável não é aprovável.
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 pub fn allows_write(_path: &Path) -> Result<bool, String> {
     Err("verificação de ACL não implementada nesta plataforma".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grants_write;
+
+    /// Monta uma ACL v2 com as entradas (tag, permissão).
+    fn acl(entries: &[(u16, u16)]) -> Vec<u8> {
+        let mut v = 2u32.to_le_bytes().to_vec();
+        for (tag, perm) in entries {
+            v.extend_from_slice(&tag.to_le_bytes());
+            v.extend_from_slice(&perm.to_le_bytes());
+            v.extend_from_slice(&0u32.to_le_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn owner_and_group_entries_are_left_to_the_mode_bits() {
+        assert!(!grants_write(&acl(&[(0x01, 7), (0x04, 5), (0x10, 7), (0x20, 5)])).unwrap());
+    }
+
+    #[test]
+    fn named_user_group_or_other_with_write_is_refused() {
+        assert!(grants_write(&acl(&[(0x01, 7), (0x02, 6), (0x20, 5)])).unwrap(), "usuário nomeado com escrita");
+        assert!(grants_write(&acl(&[(0x08, 2), (0x20, 5)])).unwrap(), "grupo nomeado com escrita");
+        assert!(grants_write(&acl(&[(0x20, 2)])).unwrap(), "outros com escrita");
+        assert!(!grants_write(&acl(&[(0x02, 4), (0x20, 4)])).unwrap(), "leitura não concede escrita");
+    }
+
+    #[test]
+    fn malformed_or_unknown_acl_fails_closed() {
+        assert!(grants_write(&[1, 0, 0]).is_err());
+        assert!(grants_write(&[3, 0, 0, 0]).is_err(), "versão desconhecida");
+        let mut bad = acl(&[(0x01, 7)]);
+        bad.push(0);
+        assert!(grants_write(&bad).is_err(), "entrada incompleta");
+    }
 }

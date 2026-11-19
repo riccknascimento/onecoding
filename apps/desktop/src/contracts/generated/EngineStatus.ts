@@ -12,4 +12,9 @@ fingerprint: string | null, models: Array<ModelInfo>,
 /**
  * Aviso curto para a UI (ex.: "timeout ao listar modelos"). Nunca contém saída bruta da CLI.
  */
-note: string | null, };
+note: string | null, 
+/**
+ * Motivo pelo qual o motor NÃO executa tarefas, mesmo aprovado (isolamento não verificado).
+ * `None` = liberado para execução. A UI nunca deve tratar um motor com bloqueio como disponível.
+ */
+execution_block: string | null, };

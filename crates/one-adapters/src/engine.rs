@@ -25,6 +25,9 @@ pub enum Confinement {
     /// Sandbox `read-only` do Codex: NÃO restringe leitura (o agente lê qualquer arquivo do usuário).
     /// Só para desenvolvimento local confiável; a UI não expõe esta opção.
     TrustedLocalRead,
+    /// Leitura limitada pelas ferramentas do próprio motor (sem isolamento de sistema operacional).
+    /// Não equivale a `WorkspaceOnly`: plugins e hooks do usuário podem continuar ativos.
+    ToolRestricted,
 }
 
 /// O que o motor informou ao final. Campos que o motor não informa ficam `None`/0 (nunca inventados).
@@ -50,6 +53,12 @@ pub trait EngineParser: Send {
 
 pub trait EngineAdapter: Send + Sync {
     fn engine(&self) -> EngineKind;
+    /// Confinamento de leitura que este motor sabe aplicar (o serviço o passa a `args`).
+    fn confinement(&self) -> Confinement;
+    /// `Some(motivo)` = motor bloqueado para execução (isolamento não verificado). `None` = liberado.
+    fn execution_block(&self) -> Option<&'static str> {
+        None
+    }
     /// Argumentos estruturados. O prompt NÃO entra aqui: vai por stdin. `Err` = pedido não suportado.
     fn args(&self, req: &ExecRequest<'_>) -> Result<Vec<String>, String>;
     fn parser(&self) -> Box<dyn EngineParser>;
@@ -137,6 +146,10 @@ impl EngineAdapter for CodexAdapter {
         EngineKind::Codex
     }
 
+    fn confinement(&self) -> Confinement {
+        Confinement::WorkspaceOnly
+    }
+
     fn args(&self, req: &ExecRequest<'_>) -> Result<Vec<String>, String> {
         if req.mode != ExecMode::ReadOnly {
             return Err(
@@ -165,6 +178,9 @@ impl EngineAdapter for CodexAdapter {
             }
             // `workspace-write`/`danger-full-access` nunca são pedidos.
             Confinement::TrustedLocalRead => a.extend(["-s".into(), "read-only".into()]),
+            Confinement::ToolRestricted => {
+                return Err("o Codex não usa confinamento por ferramenta".into())
+            }
         }
         a.push("-C".into());
         a.push(req.workspace.display().to_string());

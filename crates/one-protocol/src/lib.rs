@@ -82,6 +82,9 @@ pub struct EngineStatus {
     pub models: Vec<ModelInfo>,
     /// Aviso curto para a UI (ex.: "timeout ao listar modelos"). Nunca contém saída bruta da CLI.
     pub note: Option<String>,
+    /// Motivo pelo qual o motor NÃO executa tarefas, mesmo aprovado (isolamento não verificado).
+    /// `None` = liberado para execução. A UI nunca deve tratar um motor com bloqueio como disponível.
+    pub execution_block: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -529,6 +532,7 @@ mod tests {
             os: "macos-aarch64".into(),
             protocol_version: PROTOCOL_VERSION,
             engines: vec![EngineStatus {
+                execution_block: None,
                 engine: EngineKind::Codex,
                 installed: true,
                 path: Some("/usr/local/bin/codex".into()),

@@ -62,17 +62,22 @@ pub fn plan(agent: &AgentSpec, intent: &str, env: &Environment) -> Delegation {
     let order: Vec<&String> = std::iter::once(&agent.engines.preferred).chain(agent.engines.fallbacks.iter()).collect();
     let mut engine = None;
     for name in order {
-        match env.engines.iter().find(|e| &e.name == name) {
-            Some(e) if e.usable() => {
-                audit.push(format!("motor escolhido: {name}"));
-                engine = Some(name.clone());
-                break;
-            }
-            Some(e) => audit.push(format!(
+        // o mesmo motor pode ser reportado por mais de um executor: usa o primeiro pronto
+        let reports: Vec<&EngineState> = env.engines.iter().filter(|e| &e.name == name).collect();
+        if reports.is_empty() {
+            audit.push(format!("motor {name} não usado: não cadastrado"));
+            continue;
+        }
+        if let Some(ready) = reports.iter().find(|e| e.usable()) {
+            audit.push(format!("motor escolhido: {}", ready.name));
+            engine = Some(ready.name.clone());
+            break;
+        }
+        for e in reports {
+            audit.push(format!(
                 "motor {name} não usado: instalado={} autenticado={} aprovado={}",
                 e.installed, e.authenticated, e.approved
-            )),
-            None => audit.push(format!("motor {name} não usado: não cadastrado")),
+            ));
         }
     }
     if engine.is_none() {

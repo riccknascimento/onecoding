@@ -15,7 +15,8 @@
       "trust": "trusted",
       "fingerprint": "ab12",
       "models": [{ "id": "example-model", "label": null, "source": "catalog", "confirmed": true }],
-      "note": null
+      "note": null,
+      "execution_block": null
     }
   ],
   "demo": false

@@ -5,6 +5,7 @@
 //! ou outros dados pessoais). Execução de tarefas só entra na Fase 2.
 
 mod acl;
+pub mod claude_cursor;
 pub mod engine;
 pub mod guard;
 mod host;
@@ -19,6 +20,7 @@ use one_protocol::{
     ModelSource, TrustState, PROTOCOL_VERSION,
 };
 
+pub use claude_cursor::{ClaudeAdapter, CursorAdapter, CLAUDE_BLOCK, CURSOR_BLOCK};
 pub use engine::{
     CodexAdapter, Confinement, EngineAdapter, EngineParser, ExecRequest, ParsedSummary,
 };
@@ -65,6 +67,7 @@ pub fn detect_engine(
         fingerprint: None,
         models: vec![],
         note: None,
+        execution_block: None,
     };
     let Some(insp) = host.inspect(binary_name(engine)) else {
         st.note = Some("CLI não encontrada".into());
@@ -137,6 +140,13 @@ pub fn detect_engine(
             st.note = Some("nenhum modelo retornado".into());
         }
     }
+    // Motor aprovado mas bloqueado para execução: a interface precisa dizer por quê.
+    st.execution_block = match engine {
+        EngineKind::Codex => None,
+        EngineKind::Claude => ClaudeAdapter.execution_block(),
+        EngineKind::Cursor => CursorAdapter.execution_block(),
+    }
+    .map(String::from);
     st
 }
 

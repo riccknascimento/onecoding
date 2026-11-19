@@ -172,6 +172,25 @@ pub fn builtin() -> Vec<AgentDef> {
             ],
         },
         instructions: include_str!("../agents/onenode-configuration.md"),
+    },
+    AgentDef {
+        spec: AgentSpec {
+            id: "text-analyst".into(),
+            version: "1.0.0".into(),
+            name: "Análise de texto".into(),
+            description: "Analisa o texto fornecido pelo administrador, somente leitura, sem acessar arquivos ou OneNodes.".into(),
+            triggers: vec!["analise este texto".into(), "analise o texto".into(), "resuma este texto".into()],
+            skills: vec!["leitura-de-texto".into()],
+            tools: vec!["codex-readonly".into()],
+            permissions: vec![Permission::Read],
+            engines: EnginePlan { preferred: "codex".into(), fallbacks: vec!["claude".into(), "cursor".into()] },
+            acceptance: vec![
+                "Resposta baseada somente no texto fornecido.".into(),
+                "Nenhum arquivo é lido ou modificado.".into(),
+                "Limitações declaradas.".into(),
+            ],
+        },
+        instructions: include_str!("../agents/text-analyst.md"),
     }]
 }
 
