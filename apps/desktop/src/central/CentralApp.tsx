@@ -451,8 +451,11 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   if (!user) {
     return (
       <LoginLayout>
-        <h1>Entrar</h1>
-        <p className="muted">Entre no OneCoding para conversar e acompanhar execuções nos seus OneNodes.</p>
+        <div className="central-login-heading">
+          <span className="central-login-eyebrow">Plataforma de desenvolvimento</span>
+          <h1>Bem-vindo de volta</h1>
+          <p className="muted">Entre para acessar seus Workspaces, conversas e execuções.</p>
+        </div>
         <form onSubmit={submitLogin} aria-label="Entrar no OneHub Central">
           <label>
             E-mail

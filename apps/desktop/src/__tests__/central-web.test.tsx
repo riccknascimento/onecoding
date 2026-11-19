@@ -160,6 +160,7 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     const brand = await screen.findByRole("region", { name: "Marca OneCoding" });
     const access = screen.getByRole("region", { name: "Acesso ao OneCoding" });
     expect(main.querySelector(".central-login-banner")).not.toBeNull();
+    expect(await screen.findByRole("heading", { name: "Bem-vindo de volta" })).toBeInTheDocument();
     expect(access.querySelector("form")).toHaveAccessibleName("Entrar no OneHub Central");
     expect(Array.from(main.children)).toEqual([brand, access]);
   });
