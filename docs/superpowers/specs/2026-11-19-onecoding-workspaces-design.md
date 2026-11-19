@@ -50,6 +50,17 @@ Transformar o OneCoding Web em um espaço de trabalho com abas: Settings é a ab
 - GitHub é o remoto; clone/fetch/commit/push usam a cópia Git local no ambiente autorizado do cliente. Não instalar GitHub nas VPS. A existência de um OneNode não implica permissão para executar Git: capacidade e autorização Git são separadas das permissões atuais e precisam de implementação e validação próprias.
 - Operações Git e deploy são capacidades distintas. Credenciais/repositórios e operações Git precisam respeitar o escopo e as permissões do projeto; deploy permanece uma ação separada, sujeita à autorização explícita.
 - Esse requisito orienta o modelo futuro. A entrega atual de Workspaces não implementa cadastro de repositório, branch, autorização de executor para Git, operações Git nem deploy, e não altera máquinas de clientes.
+
+## Contrato funcional futuro: sessões Coding
+
+- Uma sessão Coding representa uma tarefa independente, com início, execução, validação e encerramento; não é uma conversa permanente. Conversa e sessão são entidades relacionadas, mas distintas: o histórico consultável da tarefa permanece depois que a execução termina.
+- Cada tarefa registra ID, título, objetivo, critérios de aceite, Workspace, projeto, executor, motor/modelo selecionados, estado e resultado. O histórico também deve preservar logs, testes e commits associados.
+- Os estados persistentes são: criada, executando, validando, aguardando integração, concluída, bloqueada, falhou ou cancelada. Sessões simultâneas no mesmo Workspace mantêm escopo e estado isolados.
+- Só tarefas que alteram código precisam de branch e Git Worktree próprios. Conversas informativas não criam Worktree obrigatoriamente. O executor recebe e respeita exclusivamente o Worktree autorizado para aquela sessão.
+- A sessão conduz a tarefa até implementação e validação quando isso for possível; não termina apenas com diagnóstico. Integração/merge exige autorização. Depois da confirmação da integração, a sessão pode ser finalizada e seu Worktree limpo com segurança.
+- Não finalizar nem remover Worktree com jobs ativos, alterações não integradas ou commits não integrados. A limpeza deve verificar destino e resultado do merge (incluindo squash/rebase), pedir autorização para descartar trabalho e remover apenas recursos pertencentes à sessão. Fechar aba ou navegador não cancela jobs nem remove Worktrees.
+- Concluir uma sessão mantém seu histórico, resultado e evidências consultáveis, sem exigir que processos ou Worktrees permaneçam ativos.
+- Este contrato não implementa agora esquema, endpoints, runtime Git/Worktree ou mudanças em VPS de clientes. A futura implementação deve reutilizar os contratos existentes de Workspace, Projeto, Conversa e execução e respeitar isolamento e autorizações por cliente/projeto.
 ## Direção visual
 
 Seguir a referência enviada: cabeçalho grafite com marca, Settings e abas delineadas; área lateral escura e compacta; conteúdo principal com cartões alinhados; detalhes e estados usam os tokens já existentes. Responsivo: abas rolam horizontalmente e a sidebar vira gaveta no celular.
