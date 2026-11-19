@@ -1,7 +1,7 @@
 //! Rotas do OneHub Central. Cada operação valida identidade, papel, dono do recurso e concessão
 //! (OneNode × projeto). Quem não tem acesso recebe "não encontrado", sem revelar se o recurso existe.
 
-use axum::extract::{FromRequestParts, Path, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::{header, request::Parts, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -339,6 +339,12 @@ pub fn router_with_settings(
             "/v1/conversations",
             get(list_conversations).post(create_conversation),
         )
+        .route(
+            "/v1/workspaces",
+            get(list_workspaces).post(create_workspace),
+        )
+        .route("/v1/workspaces/{id}", put(rename_workspace))
+        .route("/v1/workspaces/{id}/context", put(set_workspace_context))
         .route(
             "/v1/conversations/{id}/messages",
             get(list_messages).post(add_message),
@@ -1139,8 +1145,198 @@ async fn revoke_grant(
 }
 
 #[derive(Deserialize)]
+pub struct WorkspaceNameBody {
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+pub struct WorkspaceContextBody {
+    pub node_id: Option<Uuid>,
+    pub project_id: Option<Uuid>,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceConversationFilter {
+    workspace_id: Option<Uuid>,
+}
+
+async fn create_workspace(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(b): Json<WorkspaceNameBody>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let name = b.name.trim();
+    if !text_len_ok(name, 1, 120) {
+        return Err(ApiError::BadRequest("invalid_name"));
+    }
+    let client = db(&s).await?;
+    let row = client
+        .query_one(
+            "INSERT INTO workspaces(owner_id, name) VALUES ($1, $2) RETURNING id, updated_at",
+            &[&user.id, &name],
+        )
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": row.get::<_, Uuid>(0),
+            "name": name,
+            "node_id": Option::<Uuid>::None,
+            "project_id": Option::<Uuid>::None,
+            "updated_at": row.get::<_, DateTime<Utc>>(1),
+        })),
+    ))
+}
+
+async fn list_workspaces(
+    State(s): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let client = db(&s).await?;
+    let rows = client
+        .query(
+            "SELECT w.id, w.name, c.node_id, c.project_id, w.updated_at \
+             FROM workspaces w LEFT JOIN workspace_contexts c ON c.workspace_id = w.id AND c.is_active \
+             WHERE w.owner_id = $1 ORDER BY w.updated_at DESC, w.created_at DESC",
+            &[&user.id],
+        )
+        .await?;
+    Ok(Json(json!(rows
+        .iter()
+        .map(|r| json!({
+            "id": r.get::<_, Uuid>(0),
+            "name": r.get::<_, String>(1),
+            "node_id": r.get::<_, Option<Uuid>>(2),
+            "project_id": r.get::<_, Option<Uuid>>(3),
+            "updated_at": r.get::<_, DateTime<Utc>>(4),
+        }))
+        .collect::<Vec<_>>())))
+}
+
+async fn rename_workspace(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(b): Json<WorkspaceNameBody>,
+) -> Result<Json<Value>, ApiError> {
+    let name = b.name.trim();
+    if !text_len_ok(name, 1, 120) {
+        return Err(ApiError::BadRequest("invalid_name"));
+    }
+    let client = db(&s).await?;
+    let row = client
+        .query_opt(
+            "UPDATE workspaces SET name = $3, updated_at = now() \
+             WHERE id = $1 AND owner_id = $2 RETURNING id, name, updated_at",
+            &[&id, &user.id, &name],
+        )
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(json!({
+        "id": row.get::<_, Uuid>(0),
+        "name": row.get::<_, String>(1),
+        "updated_at": row.get::<_, DateTime<Utc>>(2),
+    })))
+}
+
+/// Seleciona o contexto do Workspace e mantém o snapshot de contexto de suas conversas coerente.
+async fn activate_workspace_context<C: GenericClient>(
+    client: &C,
+    workspace_id: Uuid,
+    node_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+) -> Result<(), ApiError> {
+    client
+        .execute(
+            "UPDATE workspace_contexts SET is_active = false WHERE workspace_id = $1 AND is_active",
+            &[&workspace_id],
+        )
+        .await?;
+    if node_id.is_some() {
+        let existing = client
+            .query_opt(
+                "SELECT id FROM workspace_contexts \
+                 WHERE workspace_id = $1 AND node_id IS NOT DISTINCT FROM $2 AND project_id IS NOT DISTINCT FROM $3",
+                &[&workspace_id, &node_id, &project_id],
+            )
+            .await?;
+        if let Some(row) = existing {
+            let id: Uuid = row.get(0);
+            client
+                .execute(
+                    "UPDATE workspace_contexts SET is_active = true WHERE id = $1",
+                    &[&id],
+                )
+                .await?;
+        } else {
+            client
+                .execute(
+                    "INSERT INTO workspace_contexts(workspace_id, node_id, project_id, is_active) \
+                     VALUES ($1, $2, $3, true)",
+                    &[&workspace_id, &node_id, &project_id],
+                )
+                .await?;
+        }
+    }
+    client
+        .execute(
+            "UPDATE workspaces SET updated_at = now() WHERE id = $1",
+            &[&workspace_id],
+        )
+        .await?;
+    client
+        .execute(
+            "UPDATE conversations SET node_id = $2, project_id = $3 WHERE workspace_id = $1",
+            &[&workspace_id, &node_id, &project_id],
+        )
+        .await?;
+    Ok(())
+}
+
+async fn set_workspace_context(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(b): Json<WorkspaceContextBody>,
+) -> Result<StatusCode, ApiError> {
+    if b.node_id.is_none() && b.project_id.is_some() {
+        return Err(ApiError::BadRequest("context_incomplete"));
+    }
+    let mut conn = db(&s).await?;
+    let tx = conn.transaction().await?;
+    let owned = tx
+        .query_opt(
+            "SELECT id FROM workspaces WHERE id = $1 AND owner_id = $2 FOR UPDATE",
+            &[&id, &user.id],
+        )
+        .await?;
+    if owned.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    if let Some(node_id) = b.node_id {
+        let node = tx
+            .query_opt(
+                "SELECT revoked_at IS NOT NULL FROM onenodes WHERE id = $1",
+                &[&node_id],
+            )
+            .await?
+            .ok_or(ApiError::NotFound)?;
+        if node.get::<_, bool>(0) {
+            return Err(ApiError::Conflict("node_revoked"));
+        }
+        if let Some(project_id) = b.project_id {
+            check_grant(&tx, node_id, project_id).await?;
+        }
+    }
+    activate_workspace_context(&tx, id, b.node_id, b.project_id).await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
 pub struct NewConversation {
     pub title: Option<String>,
+    pub workspace_id: Option<Uuid>,
 }
 
 async fn create_conversation(
@@ -1152,29 +1348,91 @@ async fn create_conversation(
     if !text_len_ok(&title, 1, 200) {
         return Err(ApiError::BadRequest("invalid_title"));
     }
-    let client = db(&s).await?;
-    let id: Uuid = client
+    let mut client = db(&s).await?;
+    let tx = client.transaction().await?;
+    let workspace_id: Uuid = if let Some(id) = b.workspace_id {
+        let owned = tx
+            .query_opt(
+                "SELECT id FROM workspaces WHERE id = $1 AND owner_id = $2",
+                &[&id, &user.id],
+            )
+            .await?;
+        owned.map(|r| r.get(0)).ok_or(ApiError::NotFound)?
+    } else {
+        // Compatibilidade com clientes antigos que ainda criam conversas sem workspace_id.
+        tx.query_one("SELECT id FROM users WHERE id = $1 FOR UPDATE", &[&user.id])
+            .await?;
+        match tx
+            .query_opt(
+                "SELECT id FROM workspaces WHERE owner_id = $1 ORDER BY created_at LIMIT 1",
+                &[&user.id],
+            )
+            .await?
+        {
+            Some(r) => r.get(0),
+            None => tx
+                .query_one(
+                    "INSERT INTO workspaces(owner_id, name) VALUES ($1, 'Meu Workspace') RETURNING id",
+                    &[&user.id],
+                )
+                .await?
+                .get(0),
+        }
+    };
+    let context = tx
+        .query_opt(
+            "SELECT node_id, project_id FROM workspace_contexts \
+             WHERE workspace_id = $1 AND is_active",
+            &[&workspace_id],
+        )
+        .await?;
+    let (node_id, project_id): (Option<Uuid>, Option<Uuid>) = context
+        .map(|r| (r.get(0), r.get(1)))
+        .unwrap_or((None, None));
+    let id: Uuid = tx
         .query_one(
-            "INSERT INTO conversations(owner_id, title) VALUES ($1, $2) RETURNING id",
-            &[&user.id, &title.trim()],
+            "INSERT INTO conversations(owner_id, workspace_id, title, node_id, project_id) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING id",
+            &[&user.id, &workspace_id, &title.trim(), &node_id, &project_id],
         )
         .await?
         .get(0);
+    tx.commit().await?;
     Ok((
         StatusCode::CREATED,
-        Json(json!({ "id": id, "title": title.trim() })),
+        Json(json!({
+            "id": id,
+            "title": title.trim(),
+            "workspace_id": workspace_id,
+            "node_id": node_id,
+            "project_id": project_id,
+        })),
     ))
 }
 
 async fn list_conversations(
     State(s): State<AppState>,
     user: AuthUser,
+    Query(filter): Query<WorkspaceConversationFilter>,
 ) -> Result<Json<Value>, ApiError> {
     let client = db(&s).await?;
+    if let Some(workspace_id) = filter.workspace_id {
+        let owned = client
+            .query_opt(
+                "SELECT id FROM workspaces WHERE id = $1 AND owner_id = $2",
+                &[&workspace_id, &user.id],
+            )
+            .await?;
+        if owned.is_none() {
+            return Err(ApiError::NotFound);
+        }
+    }
     let rows = client
         .query(
-            "SELECT id, title, updated_at, node_id, project_id FROM conversations WHERE owner_id = $1 ORDER BY updated_at DESC LIMIT 200",
-            &[&user.id],
+            "SELECT id, title, updated_at, node_id, project_id, workspace_id \
+             FROM conversations WHERE owner_id = $1 AND ($2::uuid IS NULL OR workspace_id = $2) \
+             ORDER BY updated_at DESC LIMIT 200",
+            &[&user.id, &filter.workspace_id],
         )
         .await?;
     Ok(Json(json!(rows
@@ -1185,6 +1443,7 @@ async fn list_conversations(
             "updated_at": r.get::<_, DateTime<Utc>>(2),
             "node_id": r.get::<_, Option<Uuid>>(3),
             "project_id": r.get::<_, Option<Uuid>>(4),
+            "workspace_id": r.get::<_, Uuid>(5),
         }))
         .collect::<Vec<_>>())))
 }
@@ -1244,6 +1503,10 @@ async fn set_context(
     let mut conn = db(&s).await?;
     let tx = conn.transaction().await?;
     owned_conversation(&tx, &user, conv).await?;
+    let workspace_id: Uuid = tx
+        .query_one("SELECT workspace_id FROM conversations WHERE id = $1", &[&conv])
+        .await?
+        .get(0);
     match (b.node_id, b.project_id) {
         (None, Some(_)) => return Err(ApiError::BadRequest("context_incomplete")),
         (None, None) => {}
@@ -1260,11 +1523,7 @@ async fn set_context(
             }
         }
     }
-    tx.execute(
-        "UPDATE conversations SET node_id = $2, project_id = $3 WHERE id = $1",
-        &[&conv, &b.node_id, &b.project_id],
-    )
-    .await?;
+    activate_workspace_context(&tx, workspace_id, b.node_id, b.project_id).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1374,6 +1633,16 @@ async fn turn(
                 }
             }
         }
+    }
+    if let Some(n) = node {
+        if let Some(p) = project {
+            check_grant(&client, n, p).await?;
+        }
+        let workspace_id: Uuid = client
+            .query_one("SELECT workspace_id FROM conversations WHERE id = $1", &[&conv])
+            .await?
+            .get(0);
+        activate_workspace_context(&client, workspace_id, Some(n), project).await?;
     }
     let (user_id, user_at) =
         insert_message(&client, conv, "user", &text, "completed", None, None).await?;

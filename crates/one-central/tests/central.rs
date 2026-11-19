@@ -178,6 +178,43 @@ async fn central_end_to_end() {
     )
     .await;
     let member = login["token"].as_str().unwrap().to_string();
+    // Workspaces são pessoais e não reutilizam os projetos como identidade.
+    let (s, workspace) = call(
+        &app,
+        "POST",
+        "/v1/workspaces",
+        Some(&admin),
+        Some(json!({"name": "SystemFlow"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let workspace_id = workspace["id"].as_str().unwrap().to_string();
+    let (s, workspaces) = call(&app, "GET", "/v1/workspaces", Some(&admin), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(workspaces.as_array().unwrap().len(), 1);
+    assert_eq!(workspaces[0]["id"], workspace_id);
+    let (s, member_workspaces) = call(&app, "GET", "/v1/workspaces", Some(&member), None).await;
+    assert_eq!((s, member_workspaces.as_array().map(Vec::len)), (StatusCode::OK, Some(0)));
+    let (s, _) = call(
+        &app,
+        "PUT",
+        &format!("/v1/workspaces/{workspace_id}"),
+        Some(&member),
+        Some(json!({"name": "Acesso cruzado"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let (s, member_workspace) = call(
+        &app,
+        "POST",
+        "/v1/workspaces",
+        Some(&member),
+        Some(json!({"name": "Atendimento"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let member_workspace_id = member_workspace["id"].as_str().unwrap().to_string();
+
     let (s, _) = call(
         &app,
         "POST",
@@ -198,6 +235,7 @@ async fn central_end_to_end() {
     )
     .await;
     assert_eq!(s, StatusCode::CREATED);
+
     let node_id = node["id"].as_str().unwrap().to_string();
     let code = node["pairing_code"].as_str().unwrap().to_string();
     let (s, _) = call(
@@ -262,6 +300,7 @@ async fn central_end_to_end() {
     )
     .await;
     assert_eq!(s, StatusCode::CREATED);
+
     let project_id = proj["id"].as_str().unwrap().to_string();
     let task_body = json!({
         "node_id": node_id, "project_id": project_id, "tool": "files_list", "args": {"path": "."},
@@ -287,6 +326,47 @@ async fn central_end_to_end() {
     )
     .await;
     assert_eq!(s, StatusCode::CREATED);
+    // O contexto selecionado no Workspace é herdado por uma conversa nova, sem herdar mensagens.
+    let (s, _) = call(
+        &app,
+        "PUT",
+        &format!("/v1/workspaces/{workspace_id}/context"),
+        Some(&admin),
+        Some(json!({"node_id": node_id, "project_id": project_id})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, workspace_conversation) = call(
+        &app,
+        "POST",
+        "/v1/conversations",
+        Some(&admin),
+        Some(json!({"title": "Conversa limpa", "workspace_id": workspace_id})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(workspace_conversation["node_id"], node_id);
+    assert_eq!(workspace_conversation["project_id"], project_id);
+    assert_eq!(workspace_conversation["workspace_id"], workspace_id);
+    let (s, filtered_conversations) = call(
+        &app,
+        "GET",
+        &format!("/v1/conversations?workspace_id={workspace_id}"),
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(filtered_conversations.as_array().unwrap().len(), 1);
+    let (s, _) = call(
+        &app,
+        "GET",
+        &format!("/v1/conversations?workspace_id={workspace_id}"),
+        Some(&member),
+        None,
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, first) = call(
         &app,
         "POST",
@@ -384,6 +464,7 @@ async fn central_end_to_end() {
     .await;
     assert_eq!(s, StatusCode::CREATED);
     let conv_id = conv["id"].as_str().unwrap().to_string();
+    assert_eq!(conv["workspace_id"], member_workspace_id);
     let (s, _) = call(
         &app,
         "POST",

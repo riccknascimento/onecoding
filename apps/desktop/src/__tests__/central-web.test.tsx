@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CentralApp } from "../central/CentralApp";
+import { WorkspaceTabs } from "../central/WorkspaceTabs";
 import { createHttpTransport, OneHubError } from "../transport";
 import type { CentralMessage, ConversationSnapshot, OneHubTransport, StreamEvent, SubscribeOptions } from "../transport";
 
@@ -15,6 +16,32 @@ const NODE_DETAIL = {
   applied_report: null, grants: [],
 };
 const EMPTY: ConversationSnapshot = { last_seq: 0, messages: [], events: [], jobs: [], tasks: [] };
+
+describe("abas de Workspace", () => {
+  const workspaces = [
+    { id: "w1", name: "SystemFlow", node_id: "n1", project_id: "p1", updated_at: "x" },
+    { id: "w2", name: "Atendimento", node_id: null, project_id: null, updated_at: "x" },
+  ];
+
+  it("mantém Settings fixa, não duplica Workspace aberto e permite fechar só a aba", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const onClose = vi.fn();
+    const onCreate = vi.fn(async () => undefined);
+    render(<WorkspaceTabs workspaces={workspaces} openTabs={["w1"]} activeTab="w1" onActivate={vi.fn()} onOpen={onOpen} onClose={onClose} onCreate={onCreate} onRename={vi.fn(async () => undefined)} />);
+    expect(screen.getByRole("button", { name: /Settings/ })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Fechar SystemFlow" }));
+    expect(onClose).toHaveBeenCalledWith("w1");
+    await user.click(screen.getByRole("button", { name: "Abrir ou criar Workspace" }));
+    expect(screen.getByRole("button", { name: "SystemFlow · aberto" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Atendimento" }));
+    expect(onOpen).toHaveBeenCalledWith("w2");
+    await user.click(screen.getByRole("button", { name: "Abrir ou criar Workspace" }));
+    await user.type(screen.getByRole("textbox", { name: "Nome do novo Workspace" }), "Novo Projeto");
+    await user.click(screen.getByRole("button", { name: "Criar" }));
+    expect(onCreate).toHaveBeenCalledWith("Novo Projeto");
+  });
+});
 
 /** Transporte de teste. `me` falha até o login, como o OneHub real (sem cookie = 401). */
 function fakeTransport(over: Partial<OneHubTransport> = {}): OneHubTransport {
@@ -43,7 +70,11 @@ function fakeTransport(over: Partial<OneHubTransport> = {}): OneHubTransport {
     createProviderConnection: vi.fn(async () => ({})),
     deleteProviderConnection: vi.fn(async () => undefined),
     grants: vi.fn(async () => [{ node_id: "n1", node_name: "Servidor A", project_id: "p1", project_name: "SystemFlow", root_path: "/opt/onenode/workspace/systemflow" }]),
-    conversations: vi.fn(async () => [{ id: "c1", title: "Plano", updated_at: "x", node_id: null, project_id: null }]),
+    workspaces: vi.fn(async () => [{ id: "w1", name: "Meu Workspace", node_id: null, project_id: null, updated_at: "x" }]),
+    createWorkspace: vi.fn(async (name: string) => ({ id: "w2", name, node_id: null, project_id: null, updated_at: "x" })),
+    renameWorkspace: vi.fn(async (id: string, name: string) => ({ id, name, node_id: null, project_id: null, updated_at: "x" })),
+    setWorkspaceContext: vi.fn(async () => undefined),
+    conversations: vi.fn(async () => [{ id: "c1", title: "Plano", updated_at: "x", node_id: null, project_id: null, workspace_id: "w1" }]),
     createConversation: vi.fn(async () => ({ id: "c2", title: "Nova conversa" })),
     messages: vi.fn(async () => []),
     turn: vi.fn(async () => ({ user_message: msg({ role: "user", body: "oi" }), assistant_message: msg({ body: "" }) })),
@@ -95,7 +126,7 @@ async function open(t: OneHubTransport) {
 
 /** Conversa que se comporta como o OneHub: o contexto salvo volta na listagem de conversas. */
 function contextConversation() {
-  const conv = { id: "c1", title: "Plano", updated_at: "x", node_id: null as string | null, project_id: null as string | null };
+  const conv = { id: "c1", title: "Plano", updated_at: "x", node_id: null as string | null, project_id: null as string | null, workspace_id: "w1" };
   return {
     conv,
     conversations: vi.fn(async () => [{ ...conv }]),
@@ -117,6 +148,9 @@ async function login(t: OneHubTransport) {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  window.history.replaceState({}, "", "/");
+  window.localStorage.clear();
+  window.sessionStorage.clear();
 });
 
 describe("OneAgent Web (OneHub Central): tela", () => {
@@ -139,6 +173,50 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
     expect(await screen.findByRole("button", { name: /Plano/ })).toBeInTheDocument();
     expect(screen.queryByLabelText("Senha")).not.toBeInTheDocument();
+  });
+
+  it("abre no Chat por padrão e alterna grupos da sidebar", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
+    expect(await screen.findByRole("button", { name: /Plano/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "OneNode" })).toBeInTheDocument();
+    const resources = screen.getByRole("button", { name: "Recursos" });
+    expect(resources).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(resources);
+    expect(resources).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Projetos" })).not.toBeInTheDocument();
+    await userEvent.click(resources);
+    expect(screen.getByRole("button", { name: "Projetos" })).toBeInTheDocument();
+  });
+
+  it("abre uma nova conversa mesmo quando está em uma configuração", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "OneNode" }));
+    expect(window.location.pathname).toBe("/configuracoes/OneNodes");
+    await user.click(screen.getAllByRole("button", { name: "Meu Workspace" })[0]!);
+    await user.click(screen.getByRole("button", { name: "Nova conversa" }));
+    expect(screen.getByText("Nova conversa", { selector: ".chat-title" })).toBeInTheDocument();
+    expect(window.location.search).toBe("?workspace=w1");
+  });
+
+  it("voltar e avançar do navegador acompanham a seção de configuração", async () => {
+    window.history.replaceState({}, "", "/");
+    render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Executors" }));
+    expect(await screen.findByRole("heading", { name: "OneExecutors" })).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/configuracoes/OneExecutors");
+    act(() => {
+      window.history.pushState({}, "", "/");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(await screen.findByRole("combobox", { name: "OneNode" })).toBeInTheDocument();
+    act(() => {
+      window.history.pushState({}, "", "/configuracoes/OneExecutors");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    expect(await screen.findByRole("heading", { name: "OneExecutors" })).toBeInTheDocument();
   });
 
   it("sem concessão, o OneNode continua selecionável e a tela mostra o caminho para conceder acesso", async () => {
@@ -174,7 +252,7 @@ describe("OneAgent Web (OneHub Central): tela", () => {
 
   it("nó suspenso aparece como suspenso e o cabeçalho diz por que a análise está indisponível", async () => {
     const t = fakeTransport({
-      conversations: vi.fn(async () => [{ id: "c1", title: "Plano", updated_at: "x", node_id: "n1", project_id: "p1" }]),
+      conversations: vi.fn(async () => [{ id: "c1", title: "Plano", updated_at: "x", node_id: "n1", project_id: "p1", workspace_id: "w1" }]),
       nodes: vi.fn(async () => [{ id: "n1", name: "Servidor A", status: "online" as const, last_seen_at: null, suspended: true }]),
     });
     await login(t);
@@ -262,7 +340,7 @@ describe("OneAgent Web: Markdown seguro", () => {
     const container = document.body;
     expect(await screen.findByRole("button", { name: "Copiar código" })).toBeInTheDocument();
     expect(container.querySelector("code")?.textContent).toContain("const x = 1;");
-    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector('img[src="x"]')).toBeNull();
   });
 });
 
@@ -388,7 +466,7 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     const t = fakeTransport({ me: vi.fn(async () => USER) });
     const user = userEvent.setup();
     render(<CentralApp transport={t} />);
-    await user.click(await screen.findByRole("button", { name: "Configurações" }));
+    await user.click(await screen.findByRole("button", { name: "OneNode" }));
     expect(await screen.findByRole("heading", { name: "OneNodes" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/configuracoes/OneNodes");
     await user.click(screen.getByRole("button", { name: "Adicionar OneNode" }));
@@ -400,13 +478,13 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     expect(screen.queryByText("CODIGO-TESTE-1")).not.toBeInTheDocument();
   });
 
-  it("administrador abre OneNodes pelo menu e vê a lista com estados reais", async () => {
+  it("administrador abre a seção OneNode das configurações", async () => {
     const t = fakeTransport({ me: vi.fn(async () => USER) });
     const user = userEvent.setup();
     render(<CentralApp transport={t} />);
-    await user.click(await screen.findByRole("button", { name: "OneNodes" }));
-    expect(await screen.findByRole("heading", { level: 1, name: "OneNodes" })).toBeInTheDocument();
-    expect(await screen.findByRole("list", { name: "Lista de OneNodes" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "OneNode" }));
+    expect(await screen.findByRole("heading", { level: 2, name: "OneNodes" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Adicionar OneNode" })).toBeInTheDocument();
     expect(t.nodes).toHaveBeenCalled();
   });
 
@@ -429,7 +507,7 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     const user = userEvent.setup();
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER), ...{} })} />);
-    await user.click(await screen.findByRole("button", { name: "Configurações" }));
+    await user.click(await screen.findByRole("button", { name: "OneNode" }));
     await user.click((await screen.findAllByRole("button", { name: "Revogar" }))[0]!);
     expect(window.confirm).toHaveBeenCalled();
     expect(t.revokeNode).not.toHaveBeenCalled();

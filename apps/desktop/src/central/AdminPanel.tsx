@@ -5,14 +5,14 @@ import type { FormEvent } from "react";
 import { OneHubError } from "../transport";
 import type { CentralExecutor, CentralGrant, CentralNode, CentralUser, OneHubTransport } from "../transport";
 
-export const SETTINGS_SECTIONS = ["OneNodes", "OneExecutors", "Projetos", "Status"] as const;
+export const SETTINGS_SECTIONS = ["OneNodes", "OneExecutors", "Projetos", "Orquestrador"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
 
 const SECTION_LABEL: Record<SettingsSection, string> = {
   OneNodes: "OneNodes",
   OneExecutors: "OneExecutors",
   Projetos: "Projetos",
-  Status: "Status",
+  Orquestrador: "Orquestrador",
 };
 
 const NODE_LABEL: Record<string, string> = { online: "online", offline: "offline", pending: "aguardando pareamento", revoked: "revogado" };
@@ -42,15 +42,24 @@ function errorText(e: unknown): string {
   return "Não foi possível concluir a operação. Verifique a conexão com o OneHub.";
 }
 
-export function AdminPanel({ transport, user }: { transport: OneHubTransport; user: CentralUser }) {
+export function AdminPanel({
+  transport,
+  user,
+  section,
+  onSection,
+}: {
+  transport: OneHubTransport;
+  user: CentralUser;
+  section: SettingsSection;
+  onSection(s: SettingsSection): void;
+}) {
   if (user.role !== "admin") {
     return <p className="muted">Acesso restrito a administradores.</p>;
   }
-  return <AdminContent transport={transport} />;
+  return <AdminContent transport={transport} section={section} onSection={onSection} />;
 }
 
-function AdminContent({ transport }: { transport: OneHubTransport }) {
-  const [section, setSection] = useState<SettingsSection>(() => sectionFromPath(window.location.pathname));
+function AdminContent({ transport, section, onSection }: { transport: OneHubTransport; section: SettingsSection; onSection(s: SettingsSection): void }) {
   const [health, setHealth] = useState<{ status: string; database: string } | "erro" | null>(null);
   const [nodes, setNodes] = useState<CentralNode[]>([]);
   const [executors, setExecutors] = useState<CentralExecutor[]>([]);
@@ -86,16 +95,8 @@ function AdminContent({ transport }: { transport: OneHubTransport }) {
     load();
   }, [load]);
 
-  // endereço e botão voltar: a seção sempre reflete a URL
-  useEffect(() => {
-    const onPop = () => setSection(sectionFromPath(window.location.pathname));
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, []);
-
   function go(next: SettingsSection) {
-    if (next !== section) window.history.pushState({}, "", settingsPath(next));
-    setSection(next);
+    onSection(next);
     setAdding(null);
     setError(null);
   }
@@ -318,8 +319,14 @@ function AdminContent({ transport }: { transport: OneHubTransport }) {
           </>
         )}
 
-        {section === "Status" && (
+        {section === "Orquestrador" && (
           <>
+            <div className="card">
+              <h2>OneOrchestrator</h2>
+              <p className="muted small">
+                A coordenação por ChatGPT ainda não roda neste OneHub. Nenhum provedor de orquestração está configurado, e nenhuma resposta de IA é simulada.
+              </p>
+            </div>
             <div className="card">
               <h2>OneHub Central</h2>
               {health === null && <p className="muted">Verificando…</p>}
@@ -334,7 +341,7 @@ function AdminContent({ transport }: { transport: OneHubTransport }) {
             <div className="card">
               <h2>Ainda não disponível</h2>
               <p className="muted small">
-                Estes recursos não têm backend validado e por isso não aparecem como ações: descoberta de projetos e infraestrutura, instalação remota de OneNode por SSH, contas das CLIs, skills, agentes, plugins e MCPs, e o OneOrchestrator com ChatGPT.
+                Descoberta de projetos e infraestrutura, instalação remota de OneNode por SSH, skills, agentes, plugins e MCPs não têm backend validado e não aparecem como ações.
               </p>
             </div>
           </>

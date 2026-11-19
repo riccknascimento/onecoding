@@ -51,6 +51,15 @@ export interface CentralConversation {
   updated_at: string;
   node_id: string | null;
   project_id: string | null;
+  workspace_id?: string;
+}
+
+export interface CentralWorkspace {
+  id: string;
+  name: string;
+  node_id: string | null;
+  project_id: string | null;
+  updated_at: string;
 }
 
 export type MessageState = "completed" | "unavailable" | "rejected" | "task" | "failed" | "cancelled";
@@ -199,8 +208,12 @@ export interface OneHubTransport {
   nodes(): Promise<CentralNode[]>;
   projects(): Promise<{ id: string; name: string }[]>;
   grants(): Promise<CentralGrant[]>;
-  conversations(): Promise<CentralConversation[]>;
-  createConversation(title?: string): Promise<{ id: string; title: string }>;
+  workspaces(): Promise<CentralWorkspace[]>;
+  createWorkspace(name: string): Promise<CentralWorkspace>;
+  renameWorkspace(id: string, name: string): Promise<CentralWorkspace>;
+  setWorkspaceContext(id: string, ctx: { node_id: string | null; project_id: string | null }): Promise<void>;
+  conversations(workspaceId?: string): Promise<CentralConversation[]>;
+  createConversation(title?: string, workspaceId?: string): Promise<{ id: string; title: string; workspace_id?: string }>;
   /** Persiste o contexto da conversa. Ambos nulos = contexto OneHub Central (sem OneNode externo). */
   setConversationContext(conversationId: string, ctx: { node_id: string | null; project_id: string | null }): Promise<void>;
   /** Execuções do próprio usuário (tarefas enviadas aos OneNodes), mais recentes primeiro. */

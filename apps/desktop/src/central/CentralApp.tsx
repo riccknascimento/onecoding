@@ -6,13 +6,16 @@ import { Composer } from "../chat/Composer";
 import { Icon } from "../icons";
 import { addMessages, applyEvent, fromSnapshot } from "./chatState";
 import type { ChatState } from "./chatState";
+import type { CentralWorkspace } from "../transport";
 import { MessageView, ThreadView } from "./Thread";
-import { AdminPanel } from "./AdminPanel";
+import { AdminPanel, sectionFromPath, settingsPath } from "./AdminPanel";
 import { OneNodesPage } from "./OneNodesPage";
-import { Sidebar, type CentralView } from "./Sidebar";
+import { Sidebar, type CentralView, type SettingsSection } from "./Sidebar";
 import { CENTRAL_OPTION, ChatContextBar } from "./ChatContextBar";
 import { ProjectsPage, ExecutionsPage, UnavailablePage } from "./pages";
 import { ProviderPage } from "./ProviderPage";
+import { WorkspaceTabs, type OpenTab } from "./WorkspaceTabs";
+import { SettingsHome } from "./SettingsHome";
 
 const STREAM_LABEL: Record<StreamStatus, { text: string; tone: string }> = {
   idle: { text: "Aguardando conversa", tone: "info" },
@@ -61,6 +64,10 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conversations, setConversations] = useState<CentralConversation[]>([]);
+  const [workspaces, setWorkspaces] = useState<CentralWorkspace[]>([]);
+  const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [activeByWorkspace, setActiveByWorkspace] = useState<Record<string, string | null>>({});
   const [grants, setGrants] = useState<CentralGrant[]>([]);
   const [nodes, setNodes] = useState<CentralNode[]>([]);
   const [executors, setExecutors] = useState<CentralExecutor[]>([]);
@@ -71,15 +78,69 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [drawer, setDrawer] = useState(false);
-  const [view, setView] = useState<CentralView>(() => (window.location.pathname.startsWith("/configuracoes") ? "settings" : "chat"));
+  const [view, setView] = useState<CentralView>(() => (
+    window.location.pathname === "/configuracoes/provider-ai"
+      ? "provider"
+      : window.location.pathname.startsWith("/configuracoes") ? "settings" : "chat"
+  ));
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => sectionFromPath(window.location.pathname));
+  const [settingsHome, setSettingsHome] = useState(() => window.location.pathname === "/configuracoes");
+
+  // O endereço representa a área atual; voltar para / sempre reabre o Chat.
+  useEffect(() => {
+    const onPop = () => {
+      const workspaceId = new URLSearchParams(window.location.search).get("workspace");
+      if (workspaceId && workspaces.some((workspace) => workspace.id === workspaceId)) {
+        setActiveWorkspaceId(workspaceId);
+        setOpenTabs((tabs) => tabs.includes(workspaceId) ? tabs : [...tabs, workspaceId]);
+        setActiveId(activeByWorkspace[workspaceId] ?? conversations.find((item) => item.workspace_id === workspaceId)?.id ?? null);
+        setView("chat");
+        setDrawer(false);
+        return;
+      }
+      if (window.location.pathname === "/configuracoes/provider-ai") {
+        setView("provider");
+      } else if (window.location.pathname.startsWith("/configuracoes")) {
+        setSettingsHome(window.location.pathname === "/configuracoes");
+        setSettingsSection(sectionFromPath(window.location.pathname));
+        setView("settings");
+      } else {
+        setView("chat");
+      }
+      setDrawer(false);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [workspaces, conversations, activeByWorkspace]);
+
+  function openSettings(section: SettingsSection) {
+    setError(null);
+    setDrawer(false);
+    setSettingsSection(section);
+    setSettingsHome(false);
+    if (window.location.pathname !== settingsPath(section)) window.history.pushState({}, "", settingsPath(section));
+    setView("settings");
+  }
+
+  function navigate(view: CentralView) {
+    setError(null);
+    if (view === "provider") {
+      if (window.location.pathname !== "/configuracoes/provider-ai") window.history.pushState({}, "", "/configuracoes/provider-ai");
+    } else if (window.location.pathname.startsWith("/configuracoes")) {
+      window.history.pushState({}, "", "/");
+    }
+    setView(view);
+    setDrawer(false);
+  }
 
 
   const refreshLists = useCallback(async () => {
-    const [c, g, n, x] = await Promise.all([transport.conversations(), transport.grants(), transport.nodes(), transport.executors()]);
+    const [c, g, n, x, w] = await Promise.all([transport.conversations(), transport.grants(), transport.nodes(), transport.executors(), transport.workspaces()]);
     setConversations(c);
     setGrants(g);
     setNodes(n);
     setExecutors(x);
+    setWorkspaces(w);
     return c;
   }, [transport]);
 
@@ -106,7 +167,20 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
         if (!alive) return;
         setUser(u);
         const c = await refreshLists();
-        if (alive && c[0]) setActiveId(c[0].id);
+        if (alive) {
+          const available = await transport.workspaces();
+          const stored = window.localStorage.getItem(`onecoding.open-workspaces.${u.id}`);
+          let valid: string[] = [];
+          try { valid = stored ? (JSON.parse(stored) as string[]).filter((id) => available.some((workspace) => workspace.id === id)) : []; } catch { valid = []; }
+          const requested = new URLSearchParams(window.location.search).get("workspace");
+          const chosen = requested && available.some((workspace) => workspace.id === requested) ? requested : valid[0] ?? available[0]?.id ?? null;
+          const tabs = Array.from(new Set([...valid, ...(chosen ? [chosen] : [])]));
+          setOpenTabs(tabs);
+          setActiveWorkspaceId(chosen);
+          const current = c.find((item) => item.workspace_id === chosen);
+          if (current) setActiveId(current.id);
+          setActiveByWorkspace(Object.fromEntries(available.map((workspace) => [workspace.id, c.find((item) => item.workspace_id === workspace.id)?.id ?? null])));
+        }
         if (alive) setBooting(false);
       })
       .catch((e) => {
@@ -191,9 +265,19 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
     try {
       await transport.login(email.trim(), password);
       setPassword("");
-      setUser(await transport.me());
+      const signedIn = await transport.me();
+      setUser(signedIn);
       const c = await refreshLists();
-      setActiveId(c[0]?.id ?? null);
+      const available = await transport.workspaces();
+      const stored = window.localStorage.getItem(`onecoding.open-workspaces.${signedIn.id}`);
+      let valid: string[] = [];
+      try { valid = stored ? (JSON.parse(stored) as string[]).filter((id) => available.some((workspace) => workspace.id === id)) : []; } catch { valid = []; }
+      const chosen = valid[0] ?? available[0]?.id ?? null;
+      const tabs = Array.from(new Set([...valid, ...(chosen ? [chosen] : [])]));
+      setOpenTabs(tabs);
+      setActiveWorkspaceId(chosen);
+      setActiveId(c.find((item) => item.workspace_id === chosen)?.id ?? null);
+      setActiveByWorkspace(Object.fromEntries(available.map((workspace) => [workspace.id, c.find((item) => item.workspace_id === workspace.id)?.id ?? null])));
     } catch (e) {
       setError(errorText(e));
     } finally {
@@ -209,8 +293,60 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const newConversation = () => {
     setError(null);
     setActiveId(null);
+    if (activeWorkspaceId) setActiveByWorkspace((state) => ({ ...state, [activeWorkspaceId]: null }));
+    navigate("chat");
+    if (activeWorkspaceId) window.history.replaceState({}, "", `/?workspace=${encodeURIComponent(activeWorkspaceId)}`);
     setDrawer(false);
   };
+
+  const activateWorkspace = (id: OpenTab) => {
+    if (id === "settings") {
+      setSettingsHome(true);
+      setView("settings");
+      if (window.location.pathname !== "/configuracoes") window.history.pushState({}, "", "/configuracoes");
+      return;
+    }
+    setActiveWorkspaceId(id);
+    setOpenTabs((tabs) => tabs.includes(id) ? tabs : [...tabs, id]);
+    setActiveId(activeByWorkspace[id] ?? conversations.find((conversation) => conversation.workspace_id === id)?.id ?? null);
+    setView("chat");
+    window.history.pushState({}, "", `/?workspace=${encodeURIComponent(id)}`);
+  };
+
+  const createWorkspace = async (name: string) => {
+    try {
+      const workspace = await transport.createWorkspace(name);
+      setWorkspaces((items) => [workspace, ...items]);
+      setOpenTabs((items) => [...items, workspace.id]);
+      setActiveWorkspaceId(workspace.id);
+      setActiveId(null);
+      setChat(null);
+      setView("chat");
+      window.history.pushState({}, "", `/?workspace=${encodeURIComponent(workspace.id)}`);
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  const renameWorkspace = async (id: string, name: string) => {
+    try {
+      const updated = await transport.renameWorkspace(id, name);
+      setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, ...updated } : workspace));
+    } catch (e) {
+      setError(errorText(e));
+    }
+  };
+
+  const closeWorkspaceTab = (id: string) => {
+    const remaining = openTabs.filter((item) => item !== id);
+    setOpenTabs(remaining);
+    if (user) window.localStorage.setItem(`onecoding.open-workspaces.${user.id}`, JSON.stringify(remaining));
+    if (activeWorkspaceId === id) activateWorkspace(remaining[remaining.length - 1] ?? "settings");
+  };
+
+  useEffect(() => {
+    if (user) window.localStorage.setItem(`onecoding.open-workspaces.${user.id}`, JSON.stringify(openTabs));
+  }, [openTabs, user]);
 
   /** Persiste o contexto escolhido na conversa ativa (cria a conversa se ainda não existir). */
   const persistContext = async (node: string, project: string) => {
@@ -218,9 +354,10 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
     try {
       let id = activeId;
       if (!id) {
-        const c = await transport.createConversation();
+        const c = await transport.createConversation("Nova conversa", activeWorkspaceId ?? undefined);
         id = c.id;
         setActiveId(id);
+        if (activeWorkspaceId) setActiveByWorkspace((state) => ({ ...state, [activeWorkspaceId]: id }));
       }
       await transport.setConversationContext(id, { node_id: node || null, project_id: project || null });
       await refreshLists();
@@ -238,9 +375,10 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
     try {
       let id = activeId;
       if (!id) {
-        const c = await transport.createConversation();
+        const c = await transport.createConversation("Nova conversa", activeWorkspaceId ?? undefined);
         id = c.id;
         setActiveId(id);
+        if (activeWorkspaceId) setActiveByWorkspace((state) => ({ ...state, [activeWorkspaceId]: id }));
       }
       const result = await transport.turn(id, { text });
       setDraft("");
@@ -271,6 +409,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   if (booting) {
     return (
       <main className="central-login">
+        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
         <p className="muted">Carregando…</p>
       </main>
     );
@@ -279,7 +418,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   if (bootError && !user) {
     return (
       <main className="central-login">
-        <h1>OneCoding</h1>
+        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
         <p role="alert" className="error">OneHub Central indisponível. Verifique a conexão.</p>
         <button type="button" className="btn primary" onClick={() => setBootAttempt((n) => n + 1)}>
           Tentar de novo
@@ -291,7 +430,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   if (!user) {
     return (
       <main className="central-login">
-        <h1>OneCoding</h1>
+        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
         <p className="muted">Entre no OneCoding para conversar e acompanhar execuções nos seus OneNodes.</p>
         <form onSubmit={submitLogin} aria-label="Entrar no OneHub Central">
           <label>
@@ -312,6 +451,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   }
 
   const active = conversations.find((c) => c.id === activeId);
+  const workspaceConversations = activeWorkspaceId ? conversations.filter((conversation) => conversation.workspace_id === activeWorkspaceId) : [];
   const streamInfo = STREAM_LABEL[stream.status];
   const closedNote = stream.status === "closed" ? CLOSED_LABEL[stream.reason ?? "http"] ?? CLOSED_LABEL.http : null;
   const messages = chat?.messages ?? [];
@@ -326,35 +466,33 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
     <div className="chat-shell">
       <Sidebar
         view={shown}
+        settingsSection={settingsSection}
         isAdmin={isAdmin}
         email={user.email}
-        conversations={conversations}
+        conversations={workspaceConversations}
+        workspaces={workspaces}
+        activeWorkspaceId={shown === "chat" ? activeWorkspaceId : null}
         activeId={activeId}
         open={drawer}
-        onView={(v) => {
-          setError(null);
-          // cada área de configurações tem endereço próprio; sair dela volta para a raiz
-          if (v === "settings") {
-            if (!window.location.pathname.startsWith("/configuracoes")) window.history.pushState({}, "", "/configuracoes/OneNodes");
-          } else if (window.location.pathname.startsWith("/configuracoes")) {
-            window.history.pushState({}, "", "/");
-          }
-          setView(v);
-          setDrawer(false);
-        }}
+        onView={navigate}
+        onSettings={openSettings}
         onSelectConversation={(id) => {
           setError(null);
+          if (window.location.pathname.startsWith("/configuracoes")) window.history.pushState({}, "", "/");
           setDrawer(false);
           setActiveId(id);
+          if (activeWorkspaceId) setActiveByWorkspace((state) => ({ ...state, [activeWorkspaceId]: id }));
           setView("chat");
         }}
         onNewConversation={newConversation}
+        onOpenWorkspace={(id) => activateWorkspace(id)}
         onLogout={logout}
       />
       {drawer && <div className="rail-scrim" onClick={() => setDrawer(false)} aria-hidden="true" />}
 
       {shown === "chat" ? (
         <section className="chat-main">
+          <WorkspaceTabs workspaces={workspaces} openTabs={openTabs} activeTab={shown === "chat" ? activeWorkspaceId ?? "settings" : "settings"} onActivate={activateWorkspace} onOpen={(id) => activateWorkspace(id)} onClose={closeWorkspaceTab} onCreate={createWorkspace} onRename={renameWorkspace} />
           <header className="chat-top">
             <button type="button" className="icon-btn rail-toggle" onClick={() => setDrawer((d) => !d)} aria-label="Abrir menu">
               <Icon name="history" />
@@ -423,6 +561,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
         </section>
       ) : (
         <section className="chat-main">
+          <WorkspaceTabs workspaces={workspaces} openTabs={openTabs} activeTab="settings" onActivate={activateWorkspace} onOpen={(id) => activateWorkspace(id)} onClose={closeWorkspaceTab} onCreate={createWorkspace} onRename={renameWorkspace} />
           <header className="chat-top page-top">
             <button type="button" className="icon-btn rail-toggle" onClick={() => setDrawer((d) => !d)} aria-label="Abrir menu">
               <Icon name="history" />
@@ -431,7 +570,33 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
           <div className="page-scroll">
             {shown === "onenodes" && <OneNodesPage transport={transport} />}
             {shown === "provider" && <ProviderPage transport={transport} isAdmin={isAdmin} />}
-            {shown === "settings" && <AdminPanel transport={transport} user={user} />}
+            {shown === "settings" && (settingsHome
+              ? <SettingsHome nodes={nodes} executors={executors} onSettings={openSettings} onView={navigate} />
+              : <AdminPanel transport={transport} user={user} section={settingsSection} onSection={openSettings} />)}
+            {shown === "agents" && (
+              <UnavailablePage
+                title="Agent"
+                icon="bot"
+                reason="Agentes especializados ainda não têm backend neste OneHub. Nenhum agente foi simulado."
+                next="As execuções existentes aparecem em Execuções."
+              />
+            )}
+            {shown === "plugins" && (
+              <UnavailablePage
+                title="Plugins"
+                icon="plus"
+                reason="Plugins ainda não têm backend neste OneHub. Nenhum plugin foi simulado."
+                next="Os motores disponíveis aparecem em One Provider AI."
+              />
+            )}
+            {shown === "mcp" && (
+              <UnavailablePage
+                title="MCP"
+                icon="gateway"
+                reason="Servidores MCP ainda não têm backend neste OneHub. Nenhum servidor foi simulado."
+                next="Os motores disponíveis aparecem em One Provider AI."
+              />
+            )}
             {shown === "projects" && <ProjectsPage transport={transport} isAdmin={isAdmin} onOpenOneNodes={() => setView("onenodes")} />}
             {shown === "executions" && <ExecutionsPage transport={transport} />}
             {shown === "context" && (
@@ -444,7 +609,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
             )}
             {shown === "skills" && (
               <UnavailablePage
-                title="Skills & Agents"
+                title="Skill"
                 icon="bot"
                 reason="Agentes, skills e ferramentas ainda não têm backend neste OneHub. Nenhum agente foi simulado."
                 next="As execuções existentes aparecem em Execuções."
