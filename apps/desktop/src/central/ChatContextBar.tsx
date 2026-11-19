@@ -1,11 +1,13 @@
-// Cabeçalho do chat: OneNode, projeto, motor e modo. Mostra só o que existe de verdade no OneHub.
-// O contexto é persistido por conversa pelo pai (PUT /v1/conversations/{id}/context); aqui só se exibe e se escolhe.
+// Cabeçalho do chat, em três níveis: alvo (OneNode e projeto), modo (como a análise acontece) e detalhes
+// (motor e modelos). Só mostra o que existe de verdade no OneHub. O contexto é persistido por conversa pelo pai.
 import { useState } from "react";
 import type { CentralExecutor, CentralGrant, CentralNode } from "../transport";
 
 export const CENTRAL_OPTION = "";
 
-export function nodeStateText(n: CentralNode): { text: string; tone: "ok" | "warn" | "bad" | "info" } {
+type Tone = "ok" | "warn" | "bad" | "info" | "central";
+
+export function nodeStateText(n: CentralNode): { text: string; tone: Exclude<Tone, "central"> } {
   if (n.status === "revoked") return { text: "revogado", tone: "bad" };
   if (n.suspended) return { text: "suspenso", tone: "warn" };
   if (n.status === "online") return { text: "online", tone: "ok" };
@@ -36,6 +38,10 @@ export function directBlockReason(p: { node: CentralNode | null; grants: Central
   return null;
 }
 
+function Dot({ tone }: { tone: Tone }) {
+  return <span className={`cx-dot ${tone}`} aria-hidden="true" />;
+}
+
 export function ChatContextBar(p: Props) {
   const node = p.nodes.find((n) => n.id === p.nodeId) ?? null;
   const nodeGrants = p.grants.filter((g) => g.node_id === p.nodeId);
@@ -43,91 +49,96 @@ export function ChatContextBar(p: Props) {
   const executorText = p.executors.length === 0 ? "nenhum cadastrado" : executorOnline ? "online" : "offline";
   const blocked = directBlockReason({ node, grants: nodeGrants, executorOnline, projectId: p.projectId });
   const state = node ? nodeStateText(node) : null;
-  // no celular o motor e o modo ficam recolhidos; no desktop ficam sempre visíveis (CSS)
-  const [moreOpen, setMoreOpen] = useState(false);
+  const tone: Tone = state ? state.tone : "central";
+  const projectName = nodeGrants.find((g) => g.project_id === p.projectId)?.project_name ?? "Automático";
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   return (
-    <div className="ctx-panel" aria-label="Contexto do chat">
-      <div className="ctx-row">
-        <label className="ctx-field">
-          <span className="chip-k">OneNode</span>
-          <select value={p.nodeId} onChange={(e) => p.onNode(e.target.value)}>
-            <option value={CENTRAL_OPTION}>OneHub Central (administração)</option>
-            {p.nodes.map((n) => {
-              const st = nodeStateText(n);
-              return (
-                <option key={n.id} value={n.id} disabled={n.status === "revoked"}>
-                  {n.name} · {st.text}
-                </option>
-              );
-            })}
-          </select>
-        </label>
+    <section className={`ctx-panel cx tone-${tone}`} aria-label="Contexto do chat">
+      <div className="cx-target">
+        <div className="cx-field cx-node">
+          <label className="cx-label">
+            <span className="cx-kicker">OneNode</span>
+            <select value={p.nodeId} onChange={(e) => p.onNode(e.target.value)}>
+              <option value={CENTRAL_OPTION}>OneHub Central (administração)</option>
+              {p.nodes.map((n) => {
+                const st = nodeStateText(n);
+                return (
+                  <option key={n.id} value={n.id} disabled={n.status === "revoked"}>
+                    {n.name} · {st.text}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
+          <span className="cx-state">
+            <Dot tone={tone} />
+            {state ? state.text : "sem OneNode: contexto de administração"}
+          </span>
+        </div>
 
-        {node && (
-          nodeGrants.length > 0 ? (
-            <label className="ctx-field">
-              <span className="chip-k">Projeto</span>
-              <select value={p.projectId} onChange={(e) => p.onProject(e.target.value)}>
-                <option value="">Automático</option>
-                {nodeGrants.map((g) => (
-                  <option key={g.project_id} value={g.project_id}>{g.project_name}</option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <div className="ctx-field">
-              <span className="chip-k">Projeto</span>
-              <span className="muted small">Nenhum projeto autorizado.</span>
-              {p.isAdmin ? (
-                <button type="button" className="btn small" onClick={p.onOpenOneNodes}>Conceder acesso em OneNodes</button>
-              ) : (
-                <span className="muted small">Peça ao administrador uma concessão.</span>
-              )}
-            </div>
-          )
+        {node && nodeGrants.length > 0 && (
+          <label className="cx-field cx-project">
+            <span className="cx-kicker">Projeto</span>
+            <select value={p.projectId} onChange={(e) => p.onProject(e.target.value)}>
+              <option value="">Automático</option>
+              {nodeGrants.map((g) => (
+                <option key={g.project_id} value={g.project_id}>{g.project_name}</option>
+              ))}
+            </select>
+          </label>
         )}
 
-        <div className="ctx-status" aria-label="Estado do OneNode">
-          {state ? (
-            <span className={`status-pill ${state.tone}`}><span className="dot" aria-hidden="true" />{state.text}</span>
-          ) : (
-            <span className="status-pill info"><span className="dot" aria-hidden="true" />OneHub Central</span>
-          )}
-          <button type="button" className="ctx-toggle" aria-expanded={moreOpen} aria-controls="ctx-more" onClick={() => setMoreOpen((o) => !o)}>
-            Motor e modo
-          </button>
+        {node && nodeGrants.length === 0 && (
+          <div className="cx-field cx-project cx-empty">
+            <span className="cx-kicker">Projeto</span>
+            <span className="cx-empty-text">Nenhum projeto autorizado.</span>
+            {p.isAdmin ? (
+              <button type="button" className="cx-action" onClick={p.onOpenOneNodes}>Conceder acesso em OneNodes</button>
+            ) : (
+              <span className="cx-empty-text">Peça ao administrador uma concessão.</span>
+            )}
+          </div>
+        )}
+
+        <button type="button" className="cx-details-toggle" aria-expanded={detailsOpen} aria-controls="ctx-more" onClick={() => setDetailsOpen((o) => !o)}>
+          Motor e modo
+        </button>
+      </div>
+
+      <div className="cx-mode">
+        <div className="cx-segments" role="group" aria-label="Modo da conversa">
+          <span className="mode-chip disabled" aria-disabled="true" title="O OneOrchestrator com ChatGPT não roda neste Central">
+            Orquestrador · indisponível
+          </span>
+          <span className={`mode-chip${blocked ? " disabled" : " active"}`} aria-current={blocked ? undefined : "true"}>
+            Direto {blocked ? "· indisponível" : "· ativo"}
+          </span>
         </div>
+        {blocked ? (
+          <p className="cx-reason">{blocked}</p>
+        ) : (
+          <p className="cx-ready">Análise direta pronta · projeto: {projectName}</p>
+        )}
       </div>
 
-      <div id="ctx-more" className={`ctx-more${moreOpen ? " open" : ""}`}>
-      <div className="ctx-row ctx-meta">
-        <span className={`status-pill ${executorOnline ? "ok" : "bad"}`} title="OneExecutor que executa o Codex CLI">
-          <span className="dot" aria-hidden="true" />
-          Codex CLI (OneExecutor): {executorText}
-        </span>
-        <span className="status-pill" title="Claude Code ainda não tem integração neste Central">
-          <span className="dot" aria-hidden="true" />Claude Code · indisponível
-        </span>
-        <span className="status-pill" title="Cursor ainda não tem integração neste Central">
-          <span className="dot" aria-hidden="true" />Cursor · indisponível
-        </span>
-        <span className="muted small" title="O OneExecutor não informa a lista de modelos">Modelo CLI: não informado pelo OneExecutor</span>
-      </div>
-
-      <div className="ctx-row ctx-meta" role="group" aria-label="Modo da conversa">
-        <span className="mode-chip disabled" aria-disabled="true" title="O OneOrchestrator com ChatGPT não roda neste Central">
-          Orquestrador · indisponível
-        </span>
-        <span className={`mode-chip${blocked ? " disabled" : " active"}`} aria-current={blocked ? undefined : "true"}>
-          Direto {blocked ? "· indisponível" : "· ativo"}
-        </span>
-        <span className="muted small">Modelo ChatGPT: indisponível (Orquestrador desligado)</span>
-      </div>
-
-      </div>
-
-      {blocked && <p className="ctx-blocked">{blocked}</p>}
-    </div>
+      <dl id="ctx-more" className={`cx-details${detailsOpen ? " open" : ""}`}>
+        <div>
+          <dt>Motor</dt>
+          <dd>
+            <Dot tone={executorOnline ? "ok" : "bad"} />
+            Codex CLI (OneExecutor): {executorText}
+          </dd>
+        </div>
+        <div>
+          <dt>Outros motores</dt>
+          <dd>Claude Code e Cursor · indisponíveis neste Central</dd>
+        </div>
+        <div>
+          <dt>Modelos</dt>
+          <dd>CLI: não informado pelo OneExecutor · ChatGPT: indisponível (Orquestrador desligado)</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
