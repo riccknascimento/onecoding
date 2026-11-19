@@ -3,6 +3,7 @@
 //! (hoje no Mac, com o Codex autenticado lá). O Central nunca recebe credenciais de IA.
 
 use axum::extract::{FromRequestParts, Path, State};
+use serde::{Deserialize, Serialize};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -17,9 +18,13 @@ use deadpool_postgres::GenericClient;
 use crate::auth::{new_secret, sha256};
 use crate::events::{emit, emit_job, emit_task, sync_job_message};
 use crate::routes::{
-    audit, bearer, check_grant, db, require_admin, text_len_ok, validate_tool_args, ApiError,
+    audit, bearer, check_grant, db, owned_conversation, require_admin, text_len_ok, validate_tool_args, ApiError,
     AppState, AuthUser, Db,
 };
+use one_registry::agent::{AgentRegistry, KNOWN_ENGINES};
+use one_registry::delegation::{EngineState, Environment, Status};
+use one_registry::orchestrate;
+use one_registry::entry::Permission;
 
 pub const JOB_LEASE_SECONDS: f64 = 600.0;
 pub const EXECUTOR_ONLINE_WINDOW: i64 = 90;
@@ -36,6 +41,7 @@ pub fn routes() -> Router<AppState> {
         .route("/v1/executors/{id}/revoke", post(revoke_executor))
         .route("/v1/jobs/{id}", get(get_job))
         .route("/v1/jobs/{id}/cancel", post(cancel_job))
+        .route("/v1/delegations", post(create_delegation))
         .route("/executor/v1/pair", post(pair_executor))
         .route("/executor/v1/heartbeat", post(heartbeat))
         .route("/executor/v1/jobs/next", post(next_job))
@@ -134,14 +140,52 @@ async fn pair_executor(
     Ok(Json(json!({ "executor_id": eid, "token": token })))
 }
 
-async fn heartbeat(State(s): State<AppState>, ex: ExecutorAuth) -> Result<Json<Value>, ApiError> {
+/// Estado de um motor, reportado pelo próprio executor. Só estado: nunca credencial, token ou caminho.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EngineReport {
+    pub name: String,
+    pub installed: bool,
+    pub authenticated: bool,
+    pub approved: bool,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+const MAX_ENGINE_REPORTS: usize = 8;
+
+fn valid_reports(reports: &[EngineReport]) -> bool {
+    reports.len() <= MAX_ENGINE_REPORTS
+        && reports.iter().all(|r| {
+            KNOWN_ENGINES.contains(&r.name.as_str())
+                && r.version.as_ref().is_none_or(|v| v.len() <= 40 && v.chars().all(|c| c.is_ascii_graphic() || c == ' '))
+        })
+}
+
+async fn heartbeat(
+    State(s): State<AppState>,
+    ex: ExecutorAuth,
+    report: Option<Json<Vec<EngineReport>>>,
+) -> Result<Json<Value>, ApiError> {
     let client = db(&s).await?;
-    client
-        .execute(
-            "UPDATE executors SET last_seen_at = now() WHERE id = $1",
-            &[&ex.id],
-        )
-        .await?;
+    match report {
+        Some(Json(reports)) => {
+            if !valid_reports(&reports) {
+                return Err(ApiError::BadRequest("engines_invalid"));
+            }
+            let body = serde_json::to_value(&reports).map_err(|_| ApiError::Internal)?;
+            client
+                .execute(
+                    "UPDATE executors SET last_seen_at = now(), engines = $2, engines_reported_at = now() WHERE id = $1",
+                    &[&ex.id, &body],
+                )
+                .await?;
+        }
+        None => {
+            client
+                .execute("UPDATE executors SET last_seen_at = now() WHERE id = $1", &[&ex.id])
+                .await?;
+        }
+    }
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -293,7 +337,7 @@ async fn next_job(State(s): State<AppState>, ex: ExecutorAuth) -> Result<Respons
     // concessão revogada cancela o pedido antes de qualquer execução
     for r in tx
         .query(
-            "UPDATE jobs j SET status = 'cancelled', error = 'concessão revogada', updated_at = now() WHERE j.status = 'queued' \
+            "UPDATE jobs j SET status = 'cancelled', error = 'concessão revogada', updated_at = now() WHERE j.status = 'queued' AND j.kind = 'analysis' \
              AND NOT EXISTS (SELECT 1 FROM node_project_grants g JOIN onenodes n ON n.id = g.node_id \
              WHERE g.node_id = j.node_id AND g.project_id = j.project_id AND g.revoked_at IS NULL AND n.revoked_at IS NULL) \
              RETURNING id",
@@ -321,7 +365,7 @@ async fn next_job(State(s): State<AppState>, ex: ExecutorAuth) -> Result<Respons
         .query_opt(
             "UPDATE jobs SET status = 'running', executor_id = $1, lease_token = $2, lease_expires = now() + make_interval(secs => $3), updated_at = now() \
              WHERE id = (SELECT id FROM jobs WHERE status = 'queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1) \
-             RETURNING id, conversation_id, node_id, project_id, question, lease_token, lease_expires",
+             RETURNING id, conversation_id, node_id, project_id, question, lease_token, lease_expires, kind",
             &[&ex.id, &token, &JOB_LEASE_SECONDS],
         )
         .await?;
@@ -334,11 +378,13 @@ async fn next_job(State(s): State<AppState>, ex: ExecutorAuth) -> Result<Respons
         Some(r) => Ok(Json(json!({
             "id": r.get::<_, Uuid>(0),
             "conversation_id": r.get::<_, Uuid>(1),
-            "node_id": r.get::<_, Uuid>(2),
-            "project_id": r.get::<_, Uuid>(3),
+            // jobs de delegação não têm nó nem projeto
+            "node_id": r.get::<_, Option<Uuid>>(2),
+            "project_id": r.get::<_, Option<Uuid>>(3),
             "question": r.get::<_, String>(4),
             "lease_token": r.get::<_, Uuid>(5),
             "lease_expires_at": r.get::<_, DateTime<Utc>>(6),
+            "kind": r.get::<_, String>(7),
         }))
         .into_response()),
     }
@@ -577,7 +623,7 @@ async fn get_job(
     let client = db(&s).await?;
     let r = client
         .query_opt(
-            "SELECT conversation_id, node_id, project_id, status, question, answer, evidence, error, created_at, updated_at, created_by, cancel_requested_at IS NOT NULL FROM jobs WHERE id = $1",
+            "SELECT conversation_id, node_id, project_id, status, question, answer, evidence, error, created_at, updated_at, created_by, cancel_requested_at IS NOT NULL, kind, agent_id, agent_version, delegation FROM jobs WHERE id = $1",
             &[&id],
         )
         .await?
@@ -594,8 +640,12 @@ async fn get_job(
     Ok(Json(json!({
         "id": id,
         "conversation_id": r.get::<_, Uuid>(0),
-        "node_id": r.get::<_, Uuid>(1),
-        "project_id": r.get::<_, Uuid>(2),
+        "node_id": r.get::<_, Option<Uuid>>(1),
+        "project_id": r.get::<_, Option<Uuid>>(2),
+        "kind": r.get::<_, String>(12),
+        "agent_id": r.get::<_, Option<String>>(13),
+        "agent_version": r.get::<_, Option<String>>(14),
+        "delegation": r.get::<_, Option<Value>>(15),
         "status": r.get::<_, String>(3),
         "question": r.get::<_, String>(4),
         "answer": r.get::<_, Option<String>>(5),
@@ -614,15 +664,44 @@ pub const NO_PROJECTS_MESSAGE: &str = "Este OneNode está conectado, mas não te
 pub const NO_EXECUTOR_MESSAGE: &str = "Nenhum OneExecutor (Codex) está online neste Central, então a análise não pode ser executada agora. A conversa continua disponível.";
 
 /// Há um OneExecutor pareado, não revogado e com sinal recente (mesma janela de presença dos OneNodes).
-pub(crate) async fn executor_online<C: GenericClient>(client: &C) -> Result<bool, ApiError> {
+/// Executor pronto para `engine`: pareado, não revogado, com sinal e relatório recentes, e o motor
+/// instalado, autenticado e aprovado. Estar online sem motor pronto não basta.
+pub(crate) async fn executor_ready<C: GenericClient>(client: &C, engine: &str) -> Result<bool, ApiError> {
     let row = client
         .query_opt(
-            "SELECT 1 FROM executors WHERE revoked_at IS NULL AND paired_at IS NOT NULL \
-             AND last_seen_at > now() - ($1::int * interval '1 second') LIMIT 1",
-            &[&(EXECUTOR_ONLINE_WINDOW as i32)],
+            "SELECT 1 FROM executors e, jsonb_array_elements(e.engines) x \
+             WHERE e.revoked_at IS NULL AND e.paired_at IS NOT NULL \
+             AND e.last_seen_at > now() - ($1::int * interval '1 second') \
+             AND e.engines_reported_at > now() - ($1::int * interval '1 second') \
+             AND x->>'name' = $2 AND x->>'installed' = 'true' AND x->>'authenticated' = 'true' AND x->>'approved' = 'true' \
+             LIMIT 1",
+            &[&(EXECUTOR_ONLINE_WINDOW as i32), &engine],
         )
         .await?;
     Ok(row.is_some())
+}
+
+/// Estados de motor de todos os executores prontos para receber tarefas (a base da seleção de agentes).
+pub(crate) async fn engine_states<C: GenericClient>(client: &C) -> Result<Vec<EngineState>, ApiError> {
+    let rows = client
+        .query(
+            "SELECT x->>'name', x->>'installed', x->>'authenticated', x->>'approved' \
+             FROM executors e, jsonb_array_elements(e.engines) x \
+             WHERE e.revoked_at IS NULL AND e.paired_at IS NOT NULL \
+             AND e.last_seen_at > now() - ($1::int * interval '1 second') \
+             AND e.engines_reported_at > now() - ($1::int * interval '1 second')",
+            &[&(EXECUTOR_ONLINE_WINDOW as i32)],
+        )
+        .await?;
+    Ok(rows
+        .iter()
+        .map(|r| EngineState {
+            name: r.get::<_, String>(0),
+            installed: r.get::<_, String>(1) == "true",
+            authenticated: r.get::<_, String>(2) == "true",
+            approved: r.get::<_, String>(3) == "true",
+        })
+        .collect())
 }
 
 /// Pedido de análise a partir de texto livre no chat. Retorna (estado da mensagem, texto, job).
@@ -680,7 +759,7 @@ pub async fn analysis_turn<C: GenericClient>(
         ));
     }
     // Sem OneExecutor online, nada é enfileirado: o chat não promete uma execução que não pode acontecer.
-    if !executor_online(client).await? {
+    if !executor_ready(client, "codex").await? {
         return Ok((
             "rejected",
             NO_EXECUTOR_MESSAGE.into(),
@@ -724,3 +803,99 @@ pub async fn analysis_turn<C: GenericClient>(
         Some(job),
     ))
 }
+
+// ───────────── Delegação de OneAgents ─────────────
+
+#[derive(Debug, Deserialize)]
+pub struct DelegationBody {
+    pub conversation_id: Uuid,
+    pub intent: String,
+}
+
+/// Agentes embutidos, carregados uma vez. Instruções só entram no prompt do agente selecionado.
+fn agent_registry() -> &'static AgentRegistry {
+    static REG: std::sync::OnceLock<AgentRegistry> = std::sync::OnceLock::new();
+    REG.get_or_init(|| {
+        AgentRegistry::new(one_registry::agent::builtin()).expect("agentes embutidos são válidos")
+    })
+}
+
+/// Prompt da delegação: instruções versionadas do agente, a intenção e os critérios de aceite.
+pub fn delegation_prompt(instructions: &str, intent: &str, acceptance: &[String]) -> String {
+    let criteria: String = acceptance.iter().map(|c| format!("- {c}\n")).collect();
+    format!(
+        "{instructions}\n\n## Tarefa\n{intent}\n\n## Critérios de aceite\n{criteria}\n\
+         Responda em português e diga o que não foi possível verificar. Não modifique nenhum arquivo."
+    )
+}
+
+/// Seleciona o agente pela intenção e, se o ambiente permite, cria o job de delegação na fila do OneExecutor.
+/// Bloqueio (sem motor pronto, sem ferramenta, sem permissão) é devolvido com motivo, sem job.
+async fn create_delegation(
+    State(s): State<AppState>,
+    user: AuthUser,
+    Json(b): Json<DelegationBody>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !text_len_ok(&b.intent, 1, 2000) {
+        return Err(ApiError::BadRequest("invalid_body"));
+    }
+    let mut conn = db(&s).await?;
+    let tx = conn.transaction().await?;
+    owned_conversation(&tx, &user, b.conversation_id).await?;
+    let engines = engine_states(&tx).await?;
+    let codex_ready = engines.iter().any(|e| e.name == "codex" && e.installed && e.authenticated && e.approved);
+    // ferramenta real disponível hoje: o motor Codex em modo somente leitura (nenhuma ferramenta de OneNode)
+    let tools_available = if codex_ready { vec!["codex-readonly".to_string()] } else { vec![] };
+    let env = Environment {
+        engines,
+        tools_available,
+        // delegação do Central: leitura apenas; nenhuma permissão de escrita ou de OneNode é concedida aqui
+        effective_permissions: vec![Permission::Read],
+    };
+    let orch = orchestrate(agent_registry(), &b.intent, &env);
+    let Some(d) = orch.delegation else {
+        tx.commit().await?;
+        return Ok((
+            StatusCode::OK,
+            Json(json!({ "status": "no_agent", "reason": orch.no_agent_reason })),
+        ));
+    };
+    if let Status::Blocked { reason } = &d.status {
+        let delegation = serde_json::to_value(&d).map_err(|_| ApiError::Internal)?;
+        tx.commit().await?;
+        return Ok((
+            StatusCode::OK,
+            Json(json!({ "status": "blocked", "reason": reason, "delegation": delegation })),
+        ));
+    }
+    let instructions = orch.instructions.ok_or(ApiError::Internal)?;
+    let prompt = delegation_prompt(instructions, &b.intent, &d.acceptance);
+    if !text_len_ok(&prompt, 1, 16 * 1024) {
+        return Err(ApiError::BadRequest("prompt_too_large"));
+    }
+    let delegation = serde_json::to_value(&d).map_err(|_| ApiError::Internal)?;
+    let job: Uuid = tx
+        .query_one(
+            "INSERT INTO jobs(conversation_id, node_id, project_id, created_by, kind, question, idempotency_key, agent_id, agent_version, delegation) \
+             VALUES ($1, NULL, NULL, $2, 'delegation', $3, $4, $5, $6, $7) RETURNING id",
+            &[
+                &b.conversation_id,
+                &user.id,
+                &prompt,
+                &format!("delegacao-{}", Uuid::new_v4()),
+                &d.agent_id,
+                &d.agent_version,
+                &delegation,
+            ],
+        )
+        .await?
+        .get(0);
+    publish_job(&tx, job).await?;
+    audit(&tx, &user.email, "delegation_create", &job.to_string(), "queued").await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "status": "queued", "job_id": job, "delegation": delegation })),
+    ))
+}
+

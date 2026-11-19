@@ -8,6 +8,7 @@ pub mod events;
 pub mod executor;
 pub mod mention;
 pub mod orchestrator;
+pub mod provider_keys;
 pub mod routes;
 
 pub use routes::{router, AppState};

@@ -53,6 +53,8 @@ pub struct Settings {
     /// IPs de proxies reversos confiáveis (ex.: o Caddy). `X-Forwarded-For` só vale quando a conexão vem de um
     /// desses IPs. Vazio por padrão: o cabeçalho é ignorado.
     pub trusted_proxies: Vec<std::net::IpAddr>,
+    /// Chave-mestra das API Keys de provedores (fora do banco). Ausente: esses endpoints respondem 503.
+    pub provider_key: Option<[u8; 32]>,
 }
 
 impl Default for Settings {
@@ -61,6 +63,7 @@ impl Default for Settings {
             cookie_secure: true,
             allowed_origins: Vec::new(),
             trusted_proxies: Vec::new(),
+            provider_key: None,
         }
     }
 }
@@ -129,6 +132,8 @@ pub enum ApiError {
     Conflict(&'static str),
     /// OneNode suspenso pelo administrador: o nó recua e tenta de novo, sem parar o serviço.
     Locked(&'static str),
+    /// Recurso indisponível por configuração do servidor (ex.: chave-mestra ausente). O serviço continua de pé.
+    Unavailable(&'static str),
     Internal,
 }
 
@@ -142,6 +147,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             ApiError::Conflict(c) => (StatusCode::CONFLICT, c),
             ApiError::Locked(c) => (StatusCode::LOCKED, c),
+            ApiError::Unavailable(c) => (StatusCode::SERVICE_UNAVAILABLE, c),
             ApiError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         };
         (status, Json(json!({ "error": code }))).into_response()
@@ -306,7 +312,7 @@ pub fn router_with_settings(
                 .iter()
                 .filter_map(|o| HeaderValue::from_str(o).ok()),
         ))
-        .allow_methods([Method::GET, Method::POST, Method::PUT])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
     let has_origins = !settings.allowed_origins.is_empty();
@@ -339,6 +345,14 @@ pub fn router_with_settings(
         )
         .route("/v1/conversations/{id}/turns", post(turn))
         .route("/v1/conversations/{id}/context", put(set_context))
+        .route(
+            "/v1/provider-connections",
+            get(list_provider_connections).post(create_provider_connection),
+        )
+        .route(
+            "/v1/provider-connections/{id}",
+            axum::routing::delete(delete_provider_connection),
+        )
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/grants", get(list_grants))
         .route("/v1/tasks/{id}", get(get_task))
@@ -607,6 +621,142 @@ async fn create_onenode(
         StatusCode::CREATED,
         Json(json!({ "id": id, "pairing_code": code, "pairing_expires_at": expires })),
     ))
+}
+
+const PROVIDERS: [&str; 4] = ["openrouter", "openai", "gemini", "anthropic"];
+
+fn provider_master_key(s: &AppState) -> Result<[u8; 32], ApiError> {
+    s.settings
+        .provider_key
+        .ok_or(ApiError::Unavailable("provider_key_missing"))
+}
+
+/// Conexões de provedor sem nenhum segredo: só a dica dos últimos caracteres.
+async fn list_provider_connections(
+    State(s): State<AppState>,
+    admin: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let client = db(&s).await?;
+    let rows = client
+        .query(
+            "SELECT id, name, provider, key_hint, default_model, status, last_checked_at, created_at \
+             FROM provider_connections ORDER BY created_at",
+            &[],
+        )
+        .await?;
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "name": r.get::<_, String>(1),
+                "provider": r.get::<_, String>(2),
+                "key_hint": r.get::<_, String>(3),
+                "default_model": r.get::<_, Option<String>>(4),
+                "status": r.get::<_, String>(5),
+                "last_checked_at": r.get::<_, Option<DateTime<Utc>>>(6),
+                "created_at": r.get::<_, DateTime<Utc>>(7),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "connections": items })))
+}
+
+async fn create_provider_connection(
+    State(s): State<AppState>,
+    admin: AuthUser,
+    Json(b): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    require_admin(&admin)?;
+    let name = b
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !text_len_ok(&name, 1, 120) {
+        return Err(ApiError::BadRequest("invalid_name"));
+    }
+    let provider = b.get("provider").and_then(Value::as_str).unwrap_or("");
+    if !PROVIDERS.contains(&provider) {
+        return Err(ApiError::BadRequest("invalid_provider"));
+    }
+    let api_key = b
+        .get("api_key")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !(16..=512).contains(&api_key.len()) || api_key.chars().any(char::is_whitespace) {
+        return Err(ApiError::BadRequest("invalid_api_key"));
+    }
+    let default_model = b
+        .get("default_model")
+        .and_then(Value::as_str)
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+    if let Some(m) = &default_model {
+        if !text_len_ok(m, 1, 120) {
+            return Err(ApiError::BadRequest("invalid_model"));
+        }
+    }
+    let master = provider_master_key(&s)?;
+    let (ciphertext, nonce) =
+        crate::provider_keys::seal(&master, provider, &api_key).map_err(|_| ApiError::Internal)?;
+    let hint = crate::provider_keys::hint(&api_key);
+    let client = db(&s).await?;
+    let row = client
+        .query_one(
+            "INSERT INTO provider_connections(name, provider, key_ciphertext, key_nonce, key_hint, default_model, created_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at",
+            &[&name, &provider, &ciphertext, &nonce, &hint, &default_model, &admin.email],
+        )
+        .await?;
+    let id: Uuid = row.get(0);
+    audit(
+        &client,
+        &admin.email,
+        "provider_connection_create",
+        &id.to_string(),
+        "ok",
+    )
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "name": name,
+            "provider": provider,
+            "key_hint": hint,
+            "default_model": default_model,
+            "status": "unverified",
+        })),
+    ))
+}
+
+async fn delete_provider_connection(
+    State(s): State<AppState>,
+    admin: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    require_admin(&admin)?;
+    let client = db(&s).await?;
+    let removed = client
+        .execute("DELETE FROM provider_connections WHERE id = $1", &[&id])
+        .await?;
+    if removed == 0 {
+        return Err(ApiError::NotFound);
+    }
+    audit(
+        &client,
+        &admin.email,
+        "provider_connection_delete",
+        &id.to_string(),
+        "ok",
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn pair_node(

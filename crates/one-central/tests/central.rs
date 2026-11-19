@@ -1046,7 +1046,9 @@ async fn executor_job_flow_with_leases_grants_and_isolation() {
     .await;
     assert_eq!(s, StatusCode::OK);
     let ex_tok = paired["token"].as_str().unwrap().to_string();
-    call(&app, "POST", "/executor/v1/heartbeat", Some(&ex_tok), None).await;
+    // executor pronto para análise: motor Codex instalado, autenticado e aprovado
+    call(&app, "POST", "/executor/v1/heartbeat", Some(&ex_tok),
+        Some(json!([{"name": "codex", "installed": true, "authenticated": true, "approved": true}]))).await;
     let (_, list) = call(&app, "GET", "/v1/executors", Some(&member), None).await;
     assert_eq!(list[0]["status"], "online");
 
@@ -1389,7 +1391,18 @@ async fn paired_executor(app: &axum::Router, admin: &str) -> String {
         Some(json!({"executor_id": eid, "code": ex["pairing_code"]})),
     )
     .await;
-    p["token"].as_str().unwrap().to_string()
+    let token = p["token"].as_str().unwrap().to_string();
+    // o executor reporta o motor Codex pronto: instalado, autenticado e aprovado
+    let (s, _) = call(
+        app,
+        "POST",
+        "/executor/v1/heartbeat",
+        Some(&token),
+        Some(json!([{"name": "codex", "installed": true, "authenticated": true, "approved": true, "version": "0.164.0"}])),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    token
 }
 
 async fn new_conversation(app: &axum::Router, token: &str) -> String {
@@ -2392,4 +2405,167 @@ async fn cors_preflight_allows_the_methods_the_web_uses_from_an_allowed_origin()
         .unwrap_or_default();
     assert!(allow_methods.contains("PUT"), "PUT precisa estar liberado no CORS: {allow_methods:?}");
     assert_eq!(res.headers().get("access-control-allow-origin").map(|v| v.to_str().unwrap()), Some(origin));
+}
+
+#[tokio::test]
+#[ignore = "banco PostgreSQL de teste na VPS (ver cabeçalho)"]
+async fn delegation_is_blocked_without_a_ready_engine_and_creates_no_job() {
+    let (app, pool) = fresh_app().await;
+    let (admin, member) = admin_and_member(&app, &pool).await;
+    let cid = new_conversation(&app, &member).await;
+    // executor online mas com o motor Codex NÃO autenticado: online não basta
+    let (_, ex) = call(&app, "POST", "/v1/executors", Some(&admin), Some(json!({"name": "Sem login"}))).await;
+    let (_, p) = call(&app, "POST", "/executor/v1/pair", None, Some(json!({"executor_id": ex["id"], "code": ex["pairing_code"]}))).await;
+    let tok = p["token"].as_str().unwrap().to_string();
+    call(&app, "POST", "/executor/v1/heartbeat", Some(&tok),
+        Some(json!([{"name": "codex", "installed": true, "authenticated": false, "approved": true}]))).await;
+    let (s, r) = call(&app, "POST", "/v1/delegations", Some(&member),
+        Some(json!({"conversation_id": cid, "intent": "analise este texto: o céu é azul"}))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(r["status"], json!("blocked"));
+    assert!(r["reason"].as_str().unwrap().contains("ferramenta") || r["reason"].as_str().unwrap().contains("motor"));
+    let jobs: i64 = pool.get().await.unwrap().query_one("SELECT count(*) FROM jobs", &[]).await.unwrap().get(0);
+    assert_eq!(jobs, 0, "bloqueio não cria job");
+    // executor não recebe nada
+    let (s, _) = call(&app, "POST", "/executor/v1/jobs/next", Some(&tok), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+#[ignore = "banco PostgreSQL de teste na VPS (ver cabeçalho)"]
+async fn ready_delegation_is_delivered_structured_and_finished_with_the_result() {
+    let (app, pool) = fresh_app().await;
+    let (admin, member) = admin_and_member(&app, &pool).await;
+    let cid = new_conversation(&app, &member).await;
+    let ex_tok = paired_executor(&app, &admin).await;
+    let (s, r) = call(&app, "POST", "/v1/delegations", Some(&member),
+        Some(json!({"conversation_id": cid, "intent": "analise este texto: a sala é azul"}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{r}");
+    assert_eq!(r["status"], json!("queued"));
+    let job = r["job_id"].as_str().unwrap().to_string();
+    // o executor recebe o job de delegação com o prompt estruturado (instruções, tarefa e critérios)
+    let (s, lease) = call(&app, "POST", "/executor/v1/jobs/next", Some(&ex_tok), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(lease["id"].as_str(), Some(job.as_str()));
+    assert_eq!(lease["kind"], json!("delegation"));
+    assert!(lease["node_id"].is_null() && lease["project_id"].is_null(), "delegação não tem nó nem projeto");
+    let q = lease["question"].as_str().unwrap();
+    assert!(q.contains("Análise de texto") || q.contains("text-analyst") || q.contains("somente leitura"));
+    assert!(q.contains("## Tarefa") && q.contains("a sala é azul") && q.contains("## Critérios de aceite"));
+    let lease_tok = lease["lease_token"].as_str().unwrap().to_string();
+    // conclusão com o resultado: o OneHub guarda a resposta e marca o job como concluído
+    let (s, _) = call(&app, "POST", &format!("/executor/v1/jobs/{job}/finish"), Some(&ex_tok),
+        Some(json!({"lease_token": lease_tok, "status": "succeeded", "answer": "A frase afirma que a sala é azul."}))).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, j) = call(&app, "GET", &format!("/v1/jobs/{job}"), Some(&member), None).await;
+    assert_eq!(j["status"], json!("succeeded"));
+    assert_eq!(j["answer"], json!("A frase afirma que a sala é azul."));
+}
+
+#[tokio::test]
+#[ignore = "banco PostgreSQL de teste na VPS (ver cabeçalho)"]
+async fn delegation_refuses_unknown_intents_and_invalid_engine_reports() {
+    let (app, pool) = fresh_app().await;
+    let (admin, member) = admin_and_member(&app, &pool).await;
+    let cid = new_conversation(&app, &member).await;
+    let _ex = paired_executor(&app, &admin).await;
+    let (s, r) = call(&app, "POST", "/v1/delegations", Some(&member),
+        Some(json!({"conversation_id": cid, "intent": "faça um bolo de cenoura"}))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(r["status"], json!("no_agent"));
+    // relatório com motor desconhecido é recusado: o executor não pode inventar motores
+    let (_, ex2) = call(&app, "POST", "/v1/executors", Some(&admin), Some(json!({"name": "Inválido"}))).await;
+    let (_, p2) = call(&app, "POST", "/executor/v1/pair", None, Some(json!({"executor_id": ex2["id"], "code": ex2["pairing_code"]}))).await;
+    let tok2 = p2["token"].as_str().unwrap().to_string();
+    let (s, body) = call(&app, "POST", "/executor/v1/heartbeat", Some(&tok2),
+        Some(json!([{"name": "gpt-x", "installed": true, "authenticated": true, "approved": true}]))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"], json!("engines_invalid"));
+}
+
+
+fn app_with_provider_key(pool: db::DbPool) -> axum::Router {
+    let settings = one_central::routes::Settings {
+        provider_key: Some([42u8; 32]),
+        ..one_central::routes::Settings::default()
+    };
+    one_central::routes::router_with_settings(
+        pool,
+        std::sync::Arc::new(one_central::orchestrator::UnavailableProvider),
+        settings,
+    )
+}
+
+#[tokio::test]
+#[ignore = "banco PostgreSQL de teste na VPS (ver cabeçalho)"]
+async fn provider_connections_store_only_ciphertext_and_never_return_the_key() {
+    const PLAIN_KEY: &str = "sk-or-v1-chave-de-teste-ABCD1234";
+    let (_, pool) = fresh_app().await;
+    let (admin, member) = admin_and_member(&router(pool.clone()), &pool).await;
+
+    // sem chave-mestra: o serviço continua de pé e responde 503 explícito
+    let (s, body) = call(
+        &router(pool.clone()),
+        "POST",
+        "/v1/provider-connections",
+        Some(&admin),
+        Some(json!({"name": "OpenRouter", "provider": "openrouter", "api_key": PLAIN_KEY})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "provider_key_missing");
+
+    let app = app_with_provider_key(pool.clone());
+    let (s, body) = call(
+        &app,
+        "POST",
+        "/v1/provider-connections",
+        Some(&admin),
+        Some(json!({"name": "OpenRouter", "provider": "openrouter", "api_key": PLAIN_KEY, "default_model": "openai/gpt-4o-mini"})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert_eq!(body["key_hint"], "••••1234");
+    assert!(!body.to_string().contains(PLAIN_KEY), "a resposta nunca devolve a chave");
+    let id = body["id"].as_str().unwrap().to_string();
+
+    // o banco guarda só o texto cifrado: a chave em claro não aparece em nenhuma coluna
+    let client = pool.get().await.unwrap();
+    let row = client
+        .query_one(
+            "SELECT key_ciphertext, key_nonce FROM provider_connections WHERE id::text = $1",
+            &[&id],
+        )
+        .await
+        .unwrap();
+    let ct: Vec<u8> = row.get(0);
+    assert!(!ct.windows(PLAIN_KEY.len()).any(|w| w == PLAIN_KEY.as_bytes()));
+    let nonce: Vec<u8> = row.get(1);
+    assert_eq!(
+        one_central::provider_keys::open(&[42u8; 32], "openrouter", &ct, &nonce).unwrap(),
+        PLAIN_KEY
+    );
+    drop(client);
+
+    // validação de entrada
+    let (s, b) = call(&app, "POST", "/v1/provider-connections", Some(&admin),
+        Some(json!({"name": "X", "provider": "groq", "api_key": PLAIN_KEY}))).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::BAD_REQUEST, Some("invalid_provider")));
+    let (s, b) = call(&app, "POST", "/v1/provider-connections", Some(&admin),
+        Some(json!({"name": "X", "provider": "openai", "api_key": "curta"}))).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::BAD_REQUEST, Some("invalid_api_key")));
+
+    // listagem: só dica, sem segredo; membro comum não acessa
+    let (s, list) = call(&app, "GET", "/v1/provider-connections", Some(&admin), None).await;
+    assert_eq!(s, StatusCode::OK);
+    let text = list.to_string();
+    assert!(text.contains("••••1234") && !text.contains(PLAIN_KEY));
+    let (s, _) = call(&app, "GET", "/v1/provider-connections", Some(&member), None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // remoção: primeira remove, segunda é 404
+    let (s, _) = call(&app, "DELETE", &format!("/v1/provider-connections/{id}"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (s, _) = call(&app, "DELETE", &format!("/v1/provider-connections/{id}"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
 }

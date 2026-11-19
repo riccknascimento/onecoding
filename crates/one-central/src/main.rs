@@ -54,10 +54,23 @@ fn settings_from_env() -> Settings {
         .split(',')
         .filter_map(|ip| ip.trim().parse().ok())
         .collect();
+    // Chave-mestra das API Keys de provedores: arquivo fora do banco. Falha de leitura não derruba o serviço;
+    // os endpoints de provedores respondem 503 até a chave ser corrigida. O conteúdo nunca é impresso.
+    let provider_key = match std::env::var("ONEAGENT_CENTRAL_PROVIDER_KEY_FILE") {
+        Ok(path) => match one_central::provider_keys::load_master_key(&path) {
+            Ok(key) => Some(key),
+            Err(motivo) => {
+                eprintln!("chave-mestra de provedores indisponível: {motivo}");
+                None
+            }
+        },
+        Err(_) => None,
+    };
     Settings {
         cookie_secure,
         allowed_origins,
         trusted_proxies,
+        provider_key,
     }
 }
 

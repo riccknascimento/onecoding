@@ -8,6 +8,7 @@ publish.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aes-gcm = "0.11"
 argon2 = "0.5"
 axum = "0.8"
 base64 = "0.22"
@@ -22,6 +23,7 @@ tower-http = { version = "0.6", features = ["cors"] }
 tokio-postgres = { version = "0.7", features = ["with-uuid-1", "with-chrono-0_4", "with-serde_json-1"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+one-registry = { path = "../one-registry" }
 
 [dev-dependencies]
 http-body-util = "0.1"
