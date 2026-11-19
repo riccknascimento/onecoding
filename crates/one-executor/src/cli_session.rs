@@ -33,7 +33,12 @@ pub fn has_capacity() -> bool {
 
 /// Identificador de conta usado como nome de pasta: só UUID, sem separadores nem `..`.
 pub fn safe_id(id: &str) -> bool {
-    id.len() == 36 && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+    let mut parts = id.split('-');
+    [8, 4, 4, 4, 12].iter().all(|len| {
+        parts
+            .next()
+            .is_some_and(|part| part.len() == *len && part.chars().all(|c| c.is_ascii_hexdigit()))
+    }) && parts.next().is_none()
 }
 
 fn kind(engine: Engine) -> EngineKind {
@@ -106,9 +111,25 @@ fn handle(central: &Central, s: &CliSession, trust: &StoreTrust, root: &Path) ->
     }
 }
 
-fn profile_dir(root: &Path, connection_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn profile_dir(root: &Path, connection_id: &str) -> Result<PathBuf, String> {
+    if !safe_id(connection_id) {
+        return Err("conta inválida".into());
+    }
+    std::fs::create_dir_all(root).map_err(|_| "perfil da conta indisponível".to_string())?;
+    let root = root
+        .canonicalize()
+        .map_err(|_| "perfil da conta indisponível".to_string())?;
     let dir = root.join(connection_id);
+    if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("perfil da conta indisponível".into());
+    }
     std::fs::create_dir_all(&dir).map_err(|_| "perfil da conta indisponível".to_string())?;
+    let dir = dir
+        .canonicalize()
+        .map_err(|_| "perfil da conta indisponível".to_string())?;
+    if !dir.starts_with(&root) {
+        return Err("perfil da conta indisponível".into());
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -193,6 +214,20 @@ mod tests {
         assert!(!safe_id("../../etc/passwd"));
         assert!(!safe_id("8c2f3d1e-1111-4a2b-9c3d-0123456789a/"));
         assert!(!safe_id(""));
+    }
+
+    #[test]
+    fn account_profile_symlink_cannot_escape_profiles_root() {
+        let base = std::env::temp_dir().join(format!("oa-profile-{}", std::process::id()));
+        let root = base.join("profiles");
+        let outside = base.join("outside");
+        let id = "8c2f3d1e-1111-4a2b-9c3d-0123456789ab";
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join(id)).unwrap();
+        assert!(profile_dir(&root, id).is_err());
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[test]

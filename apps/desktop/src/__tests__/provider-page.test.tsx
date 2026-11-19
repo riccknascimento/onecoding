@@ -40,7 +40,7 @@ function fakeTransport(over: Partial<Record<keyof OneHubTransport, unknown>> = {
     updateProviderConnection: vi.fn(async () => undefined),
     orchestratorSettings: vi.fn(async () => ({ enabled: false as const, provider_connection_id: null, model: null, system_prompt: "", instructions: "", runtime_available: false as const })),
     saveOrchestratorSettings: vi.fn(async () => undefined),
-    executorSettings: vi.fn(async (id: string) => ({ executor_id: id, executor_name: "Executor Mac", cli_connection_id: null, instructions: "", runtime_supported: false as const })),
+    executorSettings: vi.fn(async (id: string) => ({ executor_id: id, executor_name: "Executor Mac", cli_connection_id: null, model: null, instructions: "", runtime_supported: true as const, coding_write_supported: false as const })),
     saveExecutorSettings: vi.fn(async () => undefined),
     ...over,
   };

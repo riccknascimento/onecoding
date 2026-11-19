@@ -83,11 +83,12 @@ pub fn validate_root(policy: &Loaded, requested: &str) -> Result<PathBuf, &'stat
 fn is_denied_prefix(p: &Path) -> bool {
     DENIED_PREFIXES.iter().any(|d| {
         let d = Path::new(d);
+        let canonical = d.canonicalize().unwrap_or_else(|_| d.to_path_buf());
         // "/" só bloqueia a própria raiz do sistema, não tudo abaixo dela
         if *d == *Path::new("/") {
-            p == d
+            p == d || p == &canonical
         } else {
-            p.starts_with(d)
+            p.starts_with(d) || p.starts_with(&canonical)
         }
     })
 }

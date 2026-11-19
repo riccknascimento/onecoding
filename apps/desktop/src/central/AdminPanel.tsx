@@ -417,7 +417,7 @@ function ExecutorProfile({ transport, executor }: { transport: OneHubTransport; 
     finally { setBusy(false); }
   }
   return <div className="executor-profile"><button type="button" className="btn small" onClick={() => void toggle()} aria-expanded={open}>Configurar perfil</button>
-    {open && <div className="admin-form"><p className="muted small">Somente Codex autenticado neste executor. A configuração ainda não está ligada ao runtime de tarefas.</p>
+    {open && <div className="admin-form"><p className="muted small">Este perfil será usado nas análises somente leitura deste executor. Execução Coding com escrita ainda não está disponível.</p>
       <label>Conta Codex<select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}><option value="">Selecione…</option>{accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
       <label>Instruções específicas<textarea rows={3} maxLength={16384} value={instructions} onChange={(e) => setInstructions(e.target.value)} /></label>
       {error && <p role="alert" className="error">{error}</p>}<button type="button" className="btn primary" disabled={busy || !selected} onClick={() => void save()}>Salvar perfil</button>

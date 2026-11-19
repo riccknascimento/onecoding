@@ -14,6 +14,10 @@ pub trait Host: Sync {
     fn inspect(&self, name: &str) -> Option<Inspected>;
     /// Executa um binário já aprovado. Sem shell; grupo de processos próprio; com prazo e limite.
     fn run(&self, exe: &TrustedExe, args: &[&str], limits: Limits) -> RunOutput;
+    /// Retorna um host isolado para o HOME de uma conta, quando o host suporta perfis.
+    fn with_profile_home(&self, _home: &Path) -> Option<Box<dyn Host>> {
+        None
+    }
     /// Execução em streaming (eventos em tempo real), com stdin e diretório de trabalho. A saída
     /// chega em `on_data`; `cancel` encerra o grupo de processos.
     fn run_stream(
@@ -142,6 +146,10 @@ impl Default for SystemHost {
 }
 
 impl Host for SystemHost {
+    fn with_profile_home(&self, home: &Path) -> Option<Box<dyn Host>> {
+        Some(Box::new(SystemHost::with_profile_home(self, home.to_path_buf())))
+    }
+
     fn inspect(&self, name: &str) -> Option<Inspected> {
         // O primeiro candidato vence; se ele for reprovado, não pulamos para o próximo (isso
         // esconderia um binário plantado antes do legítimo).

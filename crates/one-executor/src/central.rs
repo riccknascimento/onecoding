@@ -16,6 +16,9 @@ pub struct Job {
     pub lease_token: String,
     /// "analysis" (snapshot de projeto) ou "delegation" (agente, workspace vazio, somente leitura).
     pub kind: String,
+    /// Perfil Codex fixado pelo Central para este Executor; nunca substituído por outra conta.
+    pub cli_connection_id: Option<String>,
+    pub instructions: String,
 }
 
 /// Ferramentas remotas do OneNode, pedidas pelo Central. Trait para permitir teste sem rede.
@@ -186,6 +189,8 @@ impl Central {
             lease_token: text("lease_token")
                 .ok_or(CentralError::Transient("job sem lease".into()))?,
             kind: text("kind").unwrap_or_else(|| "analysis".into()),
+            cli_connection_id: text("cli_connection_id"),
+            instructions: text("instructions").unwrap_or_default(),
         }))
     }
 

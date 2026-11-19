@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use one_central::{bootstrap, db, router};
 use one_node::agent::{run_once, Cycle, Roots};
+use one_node::catalog::{self, Catalog};
 use one_node::central::Central;
 use one_node::{config, state};
 use serde_json::{json, Value};
@@ -86,12 +87,8 @@ fn make_workspace(base: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
-fn node_config(base_url: &str, state_file: &Path, projects: &[(String, PathBuf)]) -> String {
-    let projects: Vec<Value> = projects
-        .iter()
-        .map(|(id, root)| json!({ "project_id": id, "root": root }))
-        .collect();
-    json!({ "central_url": base_url, "state_file": state_file, "projects": projects }).to_string()
+fn node_config(base_url: &str, state_file: &Path) -> String {
+    json!({ "central_url": base_url, "state_file": state_file, "projects": [] }).to_string()
 }
 
 /// Dados de um OneNode de teste. O cliente HTTP bloqueante é criado e destruído dentro de `spawn_blocking`
@@ -108,12 +105,11 @@ async fn pair_node(
     dir: &Path,
     node_id: &str,
     code: &str,
-    projects: &[(String, PathBuf)],
+    allowed_root: &Path,
 ) -> NodeHandle {
     let state_file = dir.join("identidade.json");
-    let cfg_text = node_config(base, &state_file, projects);
+    let cfg_text = node_config(base, &state_file);
     let cfg = config::parse(&cfg_text).expect("configuração do OneNode");
-    let roots = Roots(config::resolve_roots(&cfg).unwrap());
     let (b, n, c) = (base.to_string(), node_id.to_string(), code.to_string());
     let sf = state_file.clone();
     let token = tokio::task::spawn_blocking(move || {
@@ -127,6 +123,21 @@ async fn pair_node(
         )
         .unwrap();
         token
+    })
+    .await
+    .unwrap();
+    let policy_path = dir.join("policy.json");
+    std::fs::write(
+        &policy_path,
+        json!({ "allowed_roots": [allowed_root] }).to_string(),
+    )
+    .unwrap();
+    let (base_url, auth_token) = (cfg.central_url, token.clone());
+    let roots = tokio::task::spawn_blocking(move || {
+        let central = Central::new(&base_url, &auth_token).unwrap();
+        let mut catalog = Catalog::default();
+        catalog::sync(&central, &policy_path, &mut catalog).expect("catálogo autorizado");
+        catalog.roots
     })
     .await
     .unwrap();
@@ -256,7 +267,7 @@ async fn onenode_full_cycle_with_authorization_and_isolation() {
         "POST",
         &format!("/v1/projects/{pid1}/grants"),
         Some(&admin),
-        Some(json!({"node_id": id_a})),
+        Some(json!({"node_id": id_a, "root_path": ws})),
     )
     .await;
     assert_eq!(s, 201);
@@ -267,7 +278,7 @@ async fn onenode_full_cycle_with_authorization_and_isolation() {
         &tmp.join("node-a"),
         &id_a,
         a["pairing_code"].as_str().unwrap(),
-        &[(pid1.clone(), ws.clone())],
+        &tmp,
     )
     .await;
     let node_b = pair_node(
@@ -275,7 +286,7 @@ async fn onenode_full_cycle_with_authorization_and_isolation() {
         &tmp.join("node-b"),
         &id_b,
         b["pairing_code"].as_str().unwrap(),
-        &[(pid2.clone(), ws.clone())],
+        &tmp,
     )
     .await;
 

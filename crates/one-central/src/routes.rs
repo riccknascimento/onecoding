@@ -871,20 +871,25 @@ async fn get_executor_settings(State(s): State<AppState>, admin: AuthUser, Path(
     require_admin(&admin)?;
     let client = db(&s).await?;
     let r = client.query_opt("SELECT e.name,es.cli_connection_id,es.instructions FROM executors e LEFT JOIN executor_settings es ON es.executor_id=e.id WHERE e.id=$1 AND e.revoked_at IS NULL", &[&id]).await?.ok_or(ApiError::NotFound)?;
-    Ok(Json(json!({"executor_id": id, "executor_name": r.get::<_, String>(0), "cli_connection_id": r.get::<_, Option<Uuid>>(1), "instructions": r.get::<_, Option<String>>(2).unwrap_or_default(), "runtime_supported": false})))
+    Ok(Json(json!({"executor_id": id, "executor_name": r.get::<_, String>(0), "cli_connection_id": r.get::<_, Option<Uuid>>(1), "model": null, "instructions": r.get::<_, Option<String>>(2).unwrap_or_default(), "runtime_supported": true, "coding_write_supported": false})))
 }
 
 async fn save_executor_settings(State(s): State<AppState>, admin: AuthUser, Path(id): Path<Uuid>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
     require_admin(&admin)?;
     let connection_id = b.get("cli_connection_id").and_then(Value::as_str).and_then(|v| Uuid::parse_str(v).ok()).ok_or(ApiError::BadRequest("cli_connection_required"))?;
     let instructions = b.get("instructions").and_then(Value::as_str).unwrap_or("");
+    if let Some(model) = b.get("model") {
+        if !model.is_null() && model.as_str().map(str::trim).map(|m| !m.is_empty()).unwrap_or(true) {
+            return Err(ApiError::BadRequest("executor_model_not_supported"));
+        }
+    }
     if instructions.len() > 16_384 { return Err(ApiError::BadRequest("invalid_instructions")); }
     let client = db(&s).await?;
-    let ready = client.query_opt("SELECT 1 FROM cli_connections c JOIN executors e ON e.id=c.executor_id WHERE c.id=$1 AND c.executor_id=$2 AND c.engine='codex' AND c.auth_state='authenticated' AND c.usage_authorized=true AND e.revoked_at IS NULL AND e.last_seen_at > now()-interval '90 seconds' AND e.engines_reported_at > now()-interval '90 seconds' AND EXISTS(SELECT 1 FROM jsonb_array_elements(e.engines) x WHERE x->>'name'='codex' AND x->>'installed'='true' AND x->>'authenticated'='true' AND x->>'approved'='true')", &[&connection_id, &id]).await?.is_some();
+    let ready = client.query_opt("SELECT 1 FROM cli_connections c JOIN executors e ON e.id=c.executor_id WHERE c.id=$1 AND c.executor_id=$2 AND c.engine='codex' AND c.auth_state='authenticated' AND c.auth_checked_at > now()-interval '90 seconds' AND c.usage_authorized=true AND e.revoked_at IS NULL AND e.last_seen_at > now()-interval '90 seconds' AND e.engines_reported_at > now()-interval '90 seconds' AND EXISTS(SELECT 1 FROM jsonb_array_elements(e.engines) x WHERE x->>'name'='codex' AND x->>'installed'='true' AND x->>'authenticated'='true' AND x->>'approved'='true')", &[&connection_id, &id]).await?.is_some();
     if !ready { return Err(ApiError::BadRequest("cli_connection_not_ready")); }
     client.execute("INSERT INTO executor_settings(executor_id,cli_connection_id,instructions,updated_by,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(executor_id) DO UPDATE SET cli_connection_id=EXCLUDED.cli_connection_id,instructions=EXCLUDED.instructions,updated_by=EXCLUDED.updated_by,updated_at=now()", &[&id, &connection_id, &instructions, &admin.email]).await?;
     audit(&client, &admin.email, "executor_settings_update", &id.to_string(), "ok").await?;
-    Ok(Json(json!({"saved": true, "runtime_supported": false})))
+    Ok(Json(json!({"saved": true, "runtime_supported": true, "coding_write_supported": false})))
 }
 
 async fn pair_node(

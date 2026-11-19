@@ -30,7 +30,53 @@ pub fn run_once(
     let Some(job) = central.next_job()? else {
         return Ok(false);
     };
-    handle_job(central, host, trust, work, &job, policy)?;
+    let Some(connection_id) = job.cli_connection_id.as_deref() else {
+        central.finish(
+            &job.id,
+            &job.lease_token,
+            false,
+            None,
+            &[],
+            Some("Executor sem conexão Codex autenticada e autorizada"),
+        )?;
+        return Ok(true);
+    };
+    if !crate::cli_session::safe_id(connection_id) {
+        central.finish(
+            &job.id,
+            &job.lease_token,
+            false,
+            None,
+            &[],
+            Some("perfil Codex inválido"),
+        )?;
+        return Ok(true);
+    }
+    let Some(profiles) = central.profiles() else {
+        central.finish(
+            &job.id,
+            &job.lease_token,
+            false,
+            None,
+            &[],
+            Some("diretório de perfis não configurado"),
+        )?;
+        return Ok(true);
+    };
+    let profile = crate::cli_session::profile_dir(profiles, connection_id)
+        .map_err(|_| CentralError::Transient("perfil Codex indisponível".into()))?;
+    let Some(profile_host) = host.with_profile_home(&profile) else {
+        central.finish(
+            &job.id,
+            &job.lease_token,
+            false,
+            None,
+            &[],
+            Some("host não suporta perfil isolado"),
+        )?;
+        return Ok(true);
+    };
+    handle_job(central, profile_host.as_ref(), trust, work, &job, policy)?;
     Ok(true)
 }
 

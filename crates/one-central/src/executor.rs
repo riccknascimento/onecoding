@@ -385,18 +385,36 @@ async fn next_job(State(s): State<AppState>, ex: ExecutorAuth) -> Result<Respons
     tx.commit().await?;
     match row {
         None => Ok(StatusCode::NO_CONTENT.into_response()),
-        Some(r) => Ok(Json(json!({
-            "id": r.get::<_, Uuid>(0),
-            "conversation_id": r.get::<_, Uuid>(1),
-            // jobs de delegação não têm nó nem projeto
-            "node_id": r.get::<_, Option<Uuid>>(2),
-            "project_id": r.get::<_, Option<Uuid>>(3),
-            "question": r.get::<_, String>(4),
-            "lease_token": r.get::<_, Uuid>(5),
-            "lease_expires_at": r.get::<_, DateTime<Utc>>(6),
-            "kind": r.get::<_, String>(7),
-        }))
-        .into_response()),
+        Some(r) => {
+            let profile = client.query_opt(
+                "SELECT c.id, es.instructions FROM executor_settings es \
+                 JOIN cli_connections c ON c.id=es.cli_connection_id AND c.executor_id=$1 \
+                 JOIN executors e ON e.id=$1 AND e.revoked_at IS NULL \
+                 WHERE es.executor_id=$1 AND c.engine='codex' AND c.auth_state='authenticated' \
+                   AND c.auth_checked_at>now()-interval '90 seconds' \
+                   AND c.usage_authorized=true AND e.last_seen_at>now()-interval '90 seconds' \
+                   AND e.engines_reported_at>now()-interval '90 seconds' \
+                   AND EXISTS(SELECT 1 FROM jsonb_array_elements(e.engines) x WHERE x->>'name'='codex' AND x->>'installed'='true' AND x->>'authenticated'='true' AND x->>'approved'='true')",
+                &[&ex.id],
+            ).await?;
+            let (connection_id, instructions) = profile
+                .map(|p| (Some(p.get::<_, Uuid>(0)), p.get::<_, String>(1)))
+                .unwrap_or((None, String::new()));
+            Ok(Json(json!({
+                "id": r.get::<_, Uuid>(0),
+                "conversation_id": r.get::<_, Uuid>(1),
+                // jobs de delegação não têm nó nem projeto
+                "node_id": r.get::<_, Option<Uuid>>(2),
+                "project_id": r.get::<_, Option<Uuid>>(3),
+                "question": r.get::<_, String>(4),
+                "lease_token": r.get::<_, Uuid>(5),
+                "lease_expires_at": r.get::<_, DateTime<Utc>>(6),
+                "kind": r.get::<_, String>(7),
+                "cli_connection_id": connection_id,
+                "instructions": instructions,
+            }))
+            .into_response())
+        },
     }
 }
 

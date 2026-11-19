@@ -934,13 +934,21 @@ async fn chat_turns_route_commands_respect_scope_and_never_fake_ai_replies() {
         Some(json!({"node_id": nid, "root_path": "/srv/teste"})),
     )
     .await;
-    // conversa nova, sem projeto escolhido: com dois projetos concedidos, pede o projeto
+    // conversa nova em Workspace sem contexto: com dois projetos concedidos, pede o projeto
+    let (_, empty_workspace) = call(
+        &app,
+        "POST",
+        "/v1/workspaces",
+        Some(&member),
+        Some(json!({"name": "Sem contexto"})),
+    )
+    .await;
     let (_, c3) = call(
         &app,
         "POST",
         "/v1/conversations",
         Some(&member),
-        Some(json!({"title": "Sem projeto"})),
+        Some(json!({"title": "Sem projeto", "workspace_id": empty_workspace["id"]})),
     )
     .await;
     let c3id = c3["id"].as_str().unwrap().to_string();
@@ -1690,8 +1698,24 @@ async fn revoked_grant_and_logout_close_the_open_stream() {
         .expect("stream encerrado pela revogação");
     assert!(closed.2.contains("grant_revoked"), "motivo: {}", closed.2);
 
-    // sessão encerrada por logout também encerra o stream (conversa sem contexto: a concessão já foi revogada)
-    let cid2 = new_conversation(&app, &member).await;
+    // Workspace sem contexto isolado para testar encerramento por logout independentemente da concessão.
+    let (_, workspace) = call(
+        &app,
+        "POST",
+        "/v1/workspaces",
+        Some(&member),
+        Some(json!({"name": "Stream sem contexto"})),
+    )
+    .await;
+    let (_, conversation) = call(
+        &app,
+        "POST",
+        "/v1/conversations",
+        Some(&member),
+        Some(json!({"title": "Logout", "workspace_id": workspace["id"]})),
+    )
+    .await;
+    let cid2 = conversation["id"].as_str().unwrap();
     let res = raw(
         &app,
         "GET",
@@ -2704,13 +2728,34 @@ async fn executor_profile_requires_its_own_ready_codex_connection_and_persists_i
     client.execute("UPDATE cli_connections SET auth_state='authenticated',auth_checked_at=now() WHERE id::text=$1", &[&connection_id]).await.unwrap();
     drop(client);
     let path = format!("/v1/executors/{executor_id}/settings");
+    let (status, unsupported) = call(&app, "PUT", &path, Some(&admin), Some(json!({"cli_connection_id":connection_id,"model":"codex-model-nao-validado"}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(unsupported["error"], "executor_model_not_supported");
     let (status, body) = call(&app, "PUT", &path, Some(&admin), Some(json!({"cli_connection_id":connection_id,"instructions":"Responda com evidências."}))).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["runtime_supported"], false);
+    assert_eq!(body["runtime_supported"], true);
+    assert_eq!(body["coding_write_supported"], false);
     let (status, saved) = call(&app, "GET", &path, Some(&admin), None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(saved["cli_connection_id"], connection_id);
     assert_eq!(saved["instructions"], "Responda com evidências.");
+    assert!(saved["model"].is_null());
+    assert_eq!(saved["runtime_supported"], true);
+    assert_eq!(saved["coding_write_supported"], false);
+    let (node_id, project_id) = node_with_project(&app, &admin, "Projeto do perfil").await;
+    let conversation_id = new_conversation(&app, &member).await;
+    let job_id = uuid::Uuid::new_v4();
+    let client = pool.get().await.unwrap();
+    client.execute(
+        "INSERT INTO jobs(id,conversation_id,node_id,project_id,created_by,question,idempotency_key) VALUES($1,$2,$3,$4,(SELECT id FROM users WHERE email=$5),'analise','perfil-executor-001')",
+        &[&job_id, &uuid::Uuid::parse_str(&conversation_id).unwrap(), &uuid::Uuid::parse_str(&node_id).unwrap(), &uuid::Uuid::parse_str(&project_id).unwrap(), &"membro@teste.local"],
+    ).await.unwrap();
+    drop(client);
+    let (status, leased) = call(&app, "POST", "/executor/v1/jobs/next", Some(&executor_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(leased["cli_connection_id"], connection_id);
+    assert_eq!(leased["instructions"], "Responda com evidências.");
+    assert!(!leased.to_string().contains("api_key"));
     let (status, _) = call(&app, "GET", &path, Some(&member), None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }

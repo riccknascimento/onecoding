@@ -11,7 +11,7 @@ use one_node::tools::is_sensitive_name;
 use serde_json::{json, Value};
 
 use crate::central::{Central, CentralError, Job, ToolBroker};
-use crate::codex::run_codex;
+use crate::codex::run_codex_with_instructions;
 
 /// Intervalo em que o executor pergunta ao Central se o cancelamento foi pedido (e renova o lease).
 const CANCEL_CHECK_EVERY: Duration = Duration::from_secs(2);
@@ -231,7 +231,15 @@ fn run_job(
         }
     };
     forward("codex_started", json!({}));
-    let answer = run_codex(host, trust, dir, &job.question, cancel, &mut forward)?;
+    let answer = run_codex_with_instructions(
+        host,
+        trust,
+        dir,
+        &job.question,
+        &job.instructions,
+        cancel,
+        &mut forward,
+    )?;
     Ok((answer, evidence))
 }
 

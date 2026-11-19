@@ -17,10 +17,19 @@ pub const CODEX_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
 pub fn prompt_for(question: &str) -> String {
+    prompt_for_with_instructions(question, "")
+}
+
+pub fn prompt_for_with_instructions(question: &str, instructions: &str) -> String {
+    let instructions = if instructions.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\nInstruções deste Executor: {}", instructions.trim())
+    };
     format!(
         "Você está analisando um snapshot somente leitura de um projeto. Responda em português, somente com base nos \
          arquivos deste diretório, cite os arquivos e trechos que sustentam cada afirmação, e diga claramente o que \
-         não foi possível verificar. Não modifique nenhum arquivo.\n\nPergunta: {question}"
+         não foi possível verificar. Não modifique nenhum arquivo.{instructions}\n\nPergunta: {question}"
     )
 }
 
@@ -35,7 +44,19 @@ pub fn run_codex(
     cancel: &AtomicBool,
     on_event: &mut dyn FnMut(&str, Value),
 ) -> Result<String, String> {
-    run_codex_prompt(host, trust, dir, &prompt_for(question), cancel, on_event)
+    run_codex_with_instructions(host, trust, dir, question, "", cancel, on_event)
+}
+
+pub fn run_codex_with_instructions(
+    host: &dyn Host,
+    trust: &dyn TrustStore,
+    dir: &Path,
+    question: &str,
+    instructions: &str,
+    cancel: &AtomicBool,
+    on_event: &mut dyn FnMut(&str, Value),
+) -> Result<String, String> {
+    run_codex_prompt(host, trust, dir, &prompt_for_with_instructions(question, instructions), cancel, on_event)
 }
 
 /// Mesma execução, com o prompt já montado (usado pelas delegações de OneAgent).
@@ -107,5 +128,18 @@ pub fn run_codex_prompt(
         (Outcome::TimedOut, _) => Err("o Codex excedeu o tempo limite".into()),
         (Outcome::OutputLimit, _) => Err("o Codex produziu saída acima do limite".into()),
         _ => Err("o Codex terminou sem resposta".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prompt_for_with_instructions;
+
+    #[test]
+    fn executor_instructions_are_applied_without_dropping_read_only_guardrails() {
+        let prompt = prompt_for_with_instructions("analise", "cite evidências");
+        assert!(prompt.contains("cite evidências"));
+        assert!(prompt.contains("Não modifique nenhum arquivo"));
+        assert!(prompt.contains("Pergunta: analise"));
     }
 }

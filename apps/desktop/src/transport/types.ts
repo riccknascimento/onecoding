@@ -173,7 +173,7 @@ export interface ProviderConnection {
 }
 
 export interface OrchestratorSettings { enabled: false; provider_connection_id: string | null; model: string | null; system_prompt: string; instructions: string; runtime_available: false; updated_at?: string; }
-export interface ExecutorSettings { executor_id: string; executor_name: string; cli_connection_id: string | null; instructions: string; runtime_supported: false; }
+export interface ExecutorSettings { executor_id: string; executor_name: string; cli_connection_id: string | null; model: null; instructions: string; runtime_supported: true; coding_write_supported: false; }
 
 export interface TurnInput {
   text: string;
