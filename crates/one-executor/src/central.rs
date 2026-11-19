@@ -34,6 +34,17 @@ pub struct Central {
     base: String,
     token: String,
     http: reqwest::blocking::Client,
+    /// Raiz dos perfis isolados das contas de CLI. Sem ela, o executor não aceita sessões de login.
+    profiles: Option<std::path::PathBuf>,
+}
+
+/// Sessão de login/status/logout de uma conta, entregue pelo Central.
+#[derive(Debug, Clone)]
+pub struct CliSession {
+    pub id: String,
+    pub action: String,
+    pub engine: String,
+    pub connection_id: String,
 }
 
 fn map(status: reqwest::StatusCode) -> Option<CentralError> {
@@ -63,7 +74,55 @@ impl Central {
             base: base.trim_end_matches('/').to_string(),
             token: token.to_string(),
             http,
+            profiles: None,
         })
+    }
+
+    pub fn with_profiles(mut self, root: std::path::PathBuf) -> Self {
+        self.profiles = Some(root);
+        self
+    }
+
+    pub fn profiles(&self) -> Option<&std::path::Path> {
+        self.profiles.as_deref()
+    }
+
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    /// Próxima sessão de conta de CLI (login, status ou logout) deste executor, ou `None`.
+    pub fn next_cli_session(&self) -> Result<Option<CliSession>, CentralError> {
+        let res = self.post("/executor/v1/cli/next", json!({}))?;
+        let v: Value = res.json().map_err(|_| CentralError::Transient("resposta inválida".into()))?;
+        let Some(s) = v.get("session").filter(|s| !s.is_null()) else {
+            return Ok(None);
+        };
+        let field = |k: &str| s.get(k).and_then(Value::as_str).map(String::from);
+        match (field("id"), field("action"), field("engine"), field("connection_id")) {
+            (Some(id), Some(action), Some(engine), Some(connection_id)) => {
+                Ok(Some(CliSession { id, action, engine, connection_id }))
+            }
+            _ => Err(CentralError::Transient("sessão inválida".into())),
+        }
+    }
+
+    /// Controle da sessão: `(cancelar, código colado)`. O código é entregue uma única vez.
+    pub fn cli_control(&self, session: &str) -> Result<(bool, Option<String>), CentralError> {
+        let res = self.post(&format!("/executor/v1/cli/sessions/{session}/control"), json!({}))?;
+        let v: Value = res.json().map_err(|_| CentralError::Transient("resposta inválida".into()))?;
+        Ok((
+            v.get("cancel").and_then(Value::as_bool).unwrap_or(true),
+            v.get("pasted_code").and_then(Value::as_str).map(String::from),
+        ))
+    }
+
+    pub fn cli_event(&self, session: &str, event: Value) -> Result<(), CentralError> {
+        self.post(&format!("/executor/v1/cli/sessions/{session}/event"), event).map(|_| ())
     }
 
     pub fn pair(base: &str, executor_id: &str, code: &str) -> Result<String, CentralError> {

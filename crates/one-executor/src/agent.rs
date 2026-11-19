@@ -20,6 +20,13 @@ pub fn run_once(
 ) -> Result<bool, CentralError> {
     let engines = crate::engines::current(host, trust);
     central.heartbeat(&engines)?;
+    // contas de CLI: só pede uma sessão quando há perfis configurados e espaço para executá-la
+    if central.profiles().is_some() && crate::cli_session::has_capacity() {
+        if let Some(session) = central.next_cli_session()? {
+            crate::cli_session::spawn(central, session, trust);
+            return Ok(true);
+        }
+    }
     let Some(job) = central.next_job()? else {
         return Ok(false);
     };

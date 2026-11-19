@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod bootstrap;
+pub mod cli_auth;
 pub mod db;
 pub mod events;
 pub mod executor;

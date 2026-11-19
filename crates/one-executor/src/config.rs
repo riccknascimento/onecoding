@@ -15,6 +15,17 @@ pub struct ExecutorConfig {
     pub trust_db: PathBuf,
     /// Raiz temporária dos snapshots. Cada job tem a própria pasta, apagada ao final.
     pub work_dir: PathBuf,
+    /// Perfis isolados das contas de CLI (um HOME por conta). Padrão: `profiles` ao lado de `work_dir`.
+    #[serde(default)]
+    pub profiles_dir: Option<PathBuf>,
+}
+
+impl ExecutorConfig {
+    pub fn profiles_root(&self) -> PathBuf {
+        self.profiles_dir.clone().unwrap_or_else(|| {
+            self.work_dir.parent().unwrap_or(&self.work_dir).join("profiles")
+        })
+    }
 }
 
 pub fn parse(text: &str) -> Result<ExecutorConfig, String> {

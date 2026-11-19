@@ -2569,3 +2569,126 @@ async fn provider_connections_store_only_ciphertext_and_never_return_the_key() {
     let (s, _) = call(&app, "DELETE", &format!("/v1/provider-connections/{id}"), Some(&admin), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
 }
+
+async fn cli_executor(app: &axum::Router, admin: &str) -> (String, String) {
+    let (_, ex) = call(app, "POST", "/v1/executors", Some(admin), Some(json!({"name": "Executor CLI"}))).await;
+    let eid = ex["id"].as_str().unwrap().to_string();
+    let (_, p) = call(app, "POST", "/executor/v1/pair", None, Some(json!({"executor_id": eid, "code": ex["pairing_code"]}))).await;
+    let token = p["token"].as_str().unwrap().to_string();
+    let (s, _) = call(app, "POST", "/executor/v1/heartbeat", Some(&token), Some(json!([]))).await;
+    assert_eq!(s, StatusCode::OK);
+    (eid, token)
+}
+
+#[tokio::test]
+#[ignore = "banco PostgreSQL de teste na VPS (ver cabeçalho)"]
+async fn cli_accounts_login_through_the_executor_with_isolated_scope_and_no_secret_leak() {
+    let (app, pool) = fresh_app().await;
+    let (admin, member) = admin_and_member(&app, &pool).await;
+    let (eid, ex_token) = cli_executor(&app, &admin).await;
+
+    // três contas Claude separadas, cada uma com o próprio estado
+    for name in ["Claude Empresa 01", "Claude Empresa 02"] {
+        let (s, _) = call(&app, "POST", "/v1/cli-connections", Some(&admin),
+            Some(json!({"name": name, "engine": "claude", "executor_id": eid, "usage_authorized": true}))).await;
+        assert_eq!(s, StatusCode::CREATED);
+    }
+    // nome repetido na mesma máquina é recusado; uso não declarado também
+    let (s, b) = call(&app, "POST", "/v1/cli-connections", Some(&admin),
+        Some(json!({"name": "Claude Empresa 01", "engine": "claude", "executor_id": eid, "usage_authorized": true}))).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::CONFLICT, Some("name_in_use")));
+    let (s, b) = call(&app, "POST", "/v1/cli-connections", Some(&admin),
+        Some(json!({"name": "Claude Empresa 03", "engine": "claude", "executor_id": eid}))).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::BAD_REQUEST, Some("usage_not_authorized")));
+
+    let (_, list) = call(&app, "GET", "/v1/cli-connections", Some(&admin), None).await;
+    let conns = list["connections"].as_array().unwrap().clone();
+    let c1 = conns[0]["id"].as_str().unwrap().to_string();
+    let c2 = conns[1]["id"].as_str().unwrap().to_string();
+
+    // membro comum não inicia login
+    let (s, _) = call(&app, "POST", &format!("/v1/cli-connections/{c1}/login"), Some(&member), None).await;
+    assert_eq!(s, StatusCode::FORBIDDEN);
+
+    // login da conta 1: uma sessão ativa por conta
+    let (s, b) = call(&app, "POST", &format!("/v1/cli-connections/{c1}/login"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let sid = b["session"]["id"].as_str().unwrap().to_string();
+    let (s, b) = call(&app, "POST", &format!("/v1/cli-connections/{c1}/login"), Some(&admin), None).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::CONFLICT, Some("session_in_progress")));
+    // a conta 2 continua livre: login independente
+    let (s, _) = call(&app, "POST", &format!("/v1/cli-connections/{c2}/login"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+
+    // o executor recebe uma sessão por vez e só das próprias contas
+    let (_, n1) = call(&app, "POST", "/executor/v1/cli/next", Some(&ex_token), None).await;
+    assert_eq!(n1["session"]["id"], json!(sid));
+    assert_eq!(n1["session"]["engine"], "claude");
+    let (_, n2) = call(&app, "POST", "/executor/v1/cli/next", Some(&ex_token), None).await;
+    assert!(n2["session"]["id"].is_string() && n2["session"]["id"] != json!(sid));
+    let (_, n3) = call(&app, "POST", "/executor/v1/cli/next", Some(&ex_token), None).await;
+    assert!(n3["session"].is_null());
+
+    // link oficial aceito; link de fora da lista recusado
+    let (s, b) = call(&app, "POST", &format!("/executor/v1/cli/sessions/{sid}/event"), Some(&ex_token),
+        Some(json!({"kind": "url", "url": "https://evil.example/login"}))).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::BAD_REQUEST, Some("url_not_official")));
+    let (s, _) = call(&app, "POST", &format!("/executor/v1/cli/sessions/{sid}/event"), Some(&ex_token),
+        Some(json!({"kind": "url", "url": "https://claude.ai/oauth/authorize?x=1"}))).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+
+    // a CLI pede o código colado: o usuário envia, o executor recebe uma única vez
+    call(&app, "POST", &format!("/executor/v1/cli/sessions/{sid}/event"), Some(&ex_token), Some(json!({"kind": "awaiting_code"}))).await;
+    let (_, g) = call(&app, "GET", &format!("/v1/cli-sessions/{sid}"), Some(&admin), None).await;
+    assert_eq!(g["awaiting_code"], json!(true));
+    let (s, _) = call(&app, "POST", &format!("/v1/cli-sessions/{sid}/code"), Some(&admin), Some(json!({"code": "ABC123-XYZ"}))).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, ctl) = call(&app, "POST", &format!("/executor/v1/cli/sessions/{sid}/control"), Some(&ex_token), None).await;
+    assert_eq!(ctl["pasted_code"], json!("ABC123-XYZ"));
+    let (_, ctl2) = call(&app, "POST", &format!("/executor/v1/cli/sessions/{sid}/control"), Some(&ex_token), None).await;
+    assert!(ctl2["pasted_code"].is_null(), "o código colado é entregue uma única vez");
+
+    // fim com verificação real: a conta fica autenticada e o estado é independente da conta 2
+    let (s, _) = call(&app, "POST", &format!("/executor/v1/cli/sessions/{sid}/event"), Some(&ex_token),
+        Some(json!({"kind": "finished", "state": "succeeded", "auth": "authenticated"}))).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, list) = call(&app, "GET", "/v1/cli-connections", Some(&admin), None).await;
+    let conns = list["connections"].as_array().unwrap();
+    assert_eq!(conns[0]["auth_state"], "authenticated");
+    assert_eq!(conns[1]["auth_state"], "unknown");
+    // nada de código, link ou segredo permanece depois do fim
+    let text = list.to_string();
+    assert!(!text.contains("ABC123-XYZ"));
+
+    // conta autenticada não pode ser removida sem desconectar antes
+    let (s, b) = call(&app, "DELETE", &format!("/v1/cli-connections/{c1}"), Some(&admin), None).await;
+    assert_eq!((s, b["error"].as_str()), (StatusCode::CONFLICT, Some("logout_first")));
+
+    // logout individual: só a conta 1 muda
+    let (s, b) = call(&app, "POST", &format!("/v1/cli-connections/{c1}/logout"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let lout = b["session"]["id"].as_str().unwrap().to_string();
+    let (_, n) = call(&app, "POST", "/executor/v1/cli/next", Some(&ex_token), None).await;
+    assert_eq!(n["session"]["action"], "logout");
+    call(&app, "POST", &format!("/executor/v1/cli/sessions/{lout}/event"), Some(&ex_token),
+        Some(json!({"kind": "finished", "state": "succeeded", "auth": "unauthenticated"}))).await;
+    let (s, _) = call(&app, "DELETE", &format!("/v1/cli-connections/{c1}"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+
+    // a sessão de login da conta 2 é cancelada pelo administrador e encerrada pelo executor
+    let n2id = n2["session"]["id"].as_str().unwrap().to_string();
+    let (s, _) = call(&app, "POST", &format!("/v1/cli-sessions/{n2id}/cancel"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, ctl) = call(&app, "POST", &format!("/executor/v1/cli/sessions/{n2id}/control"), Some(&ex_token), None).await;
+    assert_eq!(ctl["cancel"], json!(true));
+    call(&app, "POST", &format!("/executor/v1/cli/sessions/{n2id}/event"), Some(&ex_token),
+        Some(json!({"kind": "finished", "state": "cancelled", "auth": "unknown"}))).await;
+
+    // cancelamento de sessão pendente encerra na hora; outro executor não enxerga a sessão
+    let (_, st) = call(&app, "POST", &format!("/v1/cli-connections/{c2}/status"), Some(&admin), None).await;
+    let stid = st["session"]["id"].as_str().unwrap().to_string();
+    let (s, _) = call(&app, "POST", &format!("/v1/cli-sessions/{stid}/cancel"), Some(&admin), None).await;
+    assert_eq!(s, StatusCode::NO_CONTENT);
+    let (_, g) = call(&app, "GET", &format!("/v1/cli-sessions/{stid}"), Some(&admin), None).await;
+    assert_eq!(g["state"], "cancelled");
+}

@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod central;
+pub mod cli_session;
 pub mod cli_login;
 pub mod engines;
 pub mod codex;

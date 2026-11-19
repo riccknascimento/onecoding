@@ -25,6 +25,7 @@ pub trait Host: Sync {
     ) -> RunOutput {
         RunOutput {
             stdout: String::new(),
+            stderr: String::new(),
             outcome: crate::proc::Outcome::SpawnFailed,
         }
     }
@@ -46,6 +47,8 @@ pub struct SystemHost {
     /// Onde resolver interpretadores (`#!/usr/bin/env bash`) e o PATH do filho: diretórios do
     /// sistema primeiro (protegidos), para que um `bash`/`node` em pasta gravável não os sombreie.
     runtime_dirs: Vec<PathBuf>,
+    /// Perfil isolado de uma conta: HOME e diretórios XDG próprios. `None` = ambiente do serviço.
+    profile_home: Option<PathBuf>,
 }
 
 const SYSTEM_DIRS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
@@ -86,6 +89,17 @@ impl SystemHost {
         Self {
             search_dirs,
             runtime_dirs,
+            profile_home: None,
+        }
+    }
+
+    /// Mesmo host (mesmos diretórios de busca e de execução), com o login de uma conta isolada em `home`.
+    /// A aprovação do binário continua global; só as credenciais da CLI mudam de conta para conta.
+    pub fn with_profile_home(&self, home: PathBuf) -> Self {
+        Self {
+            search_dirs: self.search_dirs.clone(),
+            runtime_dirs: self.runtime_dirs.clone(),
+            profile_home: Some(home),
         }
     }
 }
@@ -98,10 +112,22 @@ impl SystemHost {
         if let Ok(path) = env::join_paths(&self.runtime_dirs) {
             cmd.env("PATH", path);
         }
-        // Allowlist de ambiente: o suficiente para a CLI achar a própria configuração/login.
-        for k in ["HOME", "USER", "LANG", "TMPDIR", "XDG_CONFIG_HOME"] {
-            if let Some(v) = env::var_os(k) {
-                cmd.env(k, v);
+        match &self.profile_home {
+            Some(home) => {
+                // perfil isolado: nenhuma configuração de outra conta ou do serviço é herdada
+                cmd.env("HOME", home)
+                    .env("XDG_CONFIG_HOME", home.join(".config"))
+                    .env("XDG_DATA_HOME", home.join(".local/share"))
+                    .env("XDG_STATE_HOME", home.join(".local/state"))
+                    .env("XDG_CACHE_HOME", home.join(".cache"));
+            }
+            None => {
+                // Allowlist de ambiente: o suficiente para a CLI achar a própria configuração/login.
+                for k in ["HOME", "USER", "LANG", "TMPDIR", "XDG_CONFIG_HOME"] {
+                    if let Some(v) = env::var_os(k) {
+                        cmd.env(k, v);
+                    }
+                }
             }
         }
         cmd.env("NO_COLOR", "1").env("CI", "1");

@@ -45,7 +45,7 @@ fn main() -> Result<(), String> {
         }
         Some("run") => {
             let identity = state::load(&cfg.state_file)?;
-            let central = Central::new(&cfg.central_url, &identity.token)?;
+            let central = Central::new(&cfg.central_url, &identity.token)?.with_profiles(cfg.profiles_root());
             // aprovação da CLI: a mesma do app (banco do OneAgent, somente o registro do Codex)
             let store = one_store::Store::open(&cfg.trust_db)
                 .map_err(|_| "não foi possível abrir o registro de aprovações".to_string())?;

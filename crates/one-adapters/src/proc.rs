@@ -32,6 +32,8 @@ pub struct Limits {
 #[derive(Debug, Clone)]
 pub struct RunOutput {
     pub stdout: String,
+    /// Saída de erro (limitada). Algumas CLIs escrevem o próprio estado aqui (ex.: "Not logged in").
+    pub stderr: String,
     pub outcome: Outcome,
 }
 
@@ -51,9 +53,8 @@ const POLL: Duration = Duration::from_millis(10);
 #[cfg(unix)]
 mod sys {
     use std::io;
-    use std::os::unix::io::AsRawFd;
     use std::os::unix::process::CommandExt;
-    use std::process::{Child, ChildStdout, Command};
+    use std::process::{Child, Command};
 
     /// O filho vira líder de um grupo novo: todos os descendentes herdam o grupo.
     pub fn prepare(cmd: &mut Command) {
@@ -69,7 +70,7 @@ mod sys {
         let _ = child.kill();
     }
 
-    pub fn set_nonblocking(out: &ChildStdout) -> io::Result<()> {
+    pub fn set_nonblocking<T: std::os::fd::AsRawFd>(out: &T) -> io::Result<()> {
         let fd = out.as_raw_fd();
         // SAFETY: fcntl em descritor válido, de propriedade de `out`.
         unsafe {
@@ -119,6 +120,7 @@ pub fn run_streaming(
 ) -> RunOutput {
     let failed = |outcome| RunOutput {
         stdout: String::new(),
+        stderr: String::new(),
         outcome,
     };
     cmd.stdin(if stdin.is_some() {
@@ -127,7 +129,7 @@ pub fn run_streaming(
         Stdio::null()
     })
     .stdout(Stdio::piped())
-    .stderr(Stdio::null());
+    .stderr(Stdio::piped());
     sys::prepare(&mut cmd);
     let Ok(mut child) = cmd.spawn() else {
         return failed(Outcome::SpawnFailed);
@@ -138,7 +140,8 @@ pub fn run_streaming(
         let _ = pipe.write_all(data);
     }
     let mut stdout = child.stdout.take().expect("stdout piped");
-    if sys::set_nonblocking(&stdout).is_err() {
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    if sys::set_nonblocking(&stdout).is_err() || sys::set_nonblocking(&stderr).is_err() {
         sys::kill_group(&mut child);
         let _ = child.wait();
         return failed(Outcome::SpawnFailed);
@@ -149,6 +152,10 @@ pub fn run_streaming(
     let mut total = 0usize;
     let mut chunk = [0u8; 8192];
     let mut eof = false;
+    // stderr é drenado no mesmo laço (senão um pipe cheio travaria a CLI) e guardado com o mesmo limite
+    let mut err_buf: Vec<u8> = Vec::new();
+    let mut err_total = 0usize;
+    let mut err_eof = false;
     let mut exit: Option<std::process::ExitStatus> = None;
     let mut exited_at: Option<Instant> = None;
     let mut forced: Option<Outcome> = None;
@@ -176,6 +183,19 @@ pub fn run_streaming(
                 Err(_) => eof = true,
             }
         }
+        while !err_eof {
+            match stderr.read(&mut chunk) {
+                Ok(0) => err_eof = true,
+                Ok(n) => {
+                    let take = n.min(limits.max_output.saturating_sub(err_total));
+                    err_buf.extend_from_slice(&chunk[..take]);
+                    err_total += take;
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(_) => err_eof = true,
+            }
+        }
         if forced.is_some() {
             break;
         }
@@ -196,7 +216,7 @@ pub fn run_streaming(
                 sys::kill_group(&mut child);
             }
         }
-        if exit.is_some() && eof {
+        if exit.is_some() && eof && err_eof {
             break;
         }
         if exited_at.is_some_and(|t| t.elapsed() >= DRAIN_GRACE) {
@@ -216,6 +236,7 @@ pub fn run_streaming(
     let outcome = forced.unwrap_or(Outcome::Exited(status.code()));
     RunOutput {
         stdout: String::from_utf8_lossy(&buf).into_owned(),
+        stderr: String::from_utf8_lossy(&err_buf).into_owned(),
         outcome,
     }
 }

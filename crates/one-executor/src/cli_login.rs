@@ -180,6 +180,23 @@ fn is_device_code(token: &str) -> bool {
         && parts.iter().all(|p| p.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()))
 }
 
+/// Encerra a CLI e tudo que ela iniciou, pelo grupo de processos.
+fn kill_tree(child: &mut std::process::Child) {
+    kill_group(child.id());
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn kill_group(pid: u32) {
+    #[cfg(unix)]
+    // SAFETY: `kill` é segura para qualquer pid/sinal; um grupo já encerrado só devolve erro, ignorado.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
 /// Executa o login oficial e reporta dicas à medida que a CLI as imprime.
 /// `pasted` recebe o código colado pelo usuário (Claude) e o repassa à entrada padrão da CLI.
 pub fn run_login(
@@ -191,7 +208,11 @@ pub fn run_login(
     pasted: Option<Receiver<String>>,
     on_hint: &mut dyn FnMut(Hint),
 ) -> Outcome {
-    let mut child = match Command::new(bin)
+    let mut command = Command::new(bin);
+    // grupo próprio: a CLI pode iniciar um binário filho (o Codex inicia o seu); cancelar encerra tudo
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let mut child = match command
         .args(engine.login_args())
         .env_clear()
         .env("HOME", home)
@@ -232,13 +253,11 @@ pub fn run_login(
 
     loop {
         if cancel.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Outcome::Cancelled;
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Outcome::TimedOut;
         }
         if let Some(rx_pasted) = &pasted {
@@ -260,12 +279,14 @@ pub fn run_login(
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                // leitores terminaram: espera o fim do processo
-                return match child.wait() {
+                // leitores terminaram: espera o fim do processo e encerra o que ficou no grupo
+                let result = match child.wait() {
                     Ok(status) if status.success() => Outcome::Exited,
                     Ok(_) => Outcome::Failed("login não concluído pela CLI".into()),
                     Err(_) => Outcome::Failed("falha ao aguardar a CLI".into()),
                 };
+                kill_group(child.id());
+                return result;
             }
         }
     }
@@ -317,6 +338,10 @@ mod tests {
         assert_eq!(Engine::Cursor.binary(), "cursor-agent");
     }
 
+    /// Scripts falsos são criados e executados sob um mesmo lock: um `fork` concorrente herda o descritor
+    /// de escrita e provoca ETXTBSY ("text file busy") no `exec`, uma corrida só de teste.
+    static FAKE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn fake_cli(dir: &Path, body: &str) -> std::path::PathBuf {
         let p = dir.join("fake-cli");
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -326,6 +351,7 @@ mod tests {
 
     #[test]
     fn login_reports_hints_then_exits_successfully() {
+        let _guard = FAKE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!("oneagent-login-ok-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bin = fake_cli(&dir, "echo 'abra https://auth.openai.com/codex/device'; echo 'codigo WXYZ-9876'; exit 0");
@@ -339,6 +365,7 @@ mod tests {
 
     #[test]
     fn login_times_out_and_the_process_is_killed() {
+        let _guard = FAKE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!("oneagent-login-to-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bin = fake_cli(&dir, "exec sleep 30");
@@ -351,7 +378,36 @@ mod tests {
     }
 
     #[test]
+    fn cancel_kills_the_whole_group_not_only_the_wrapper() {
+        let _guard = FAKE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = std::env::temp_dir().join(format!("oneagent-login-grp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // o "wrapper" inicia um filho e espera: o filho é o caso que vazava antes
+        let bin = fake_cli(&dir, r#"sleep 30 & echo $! > "$HOME/grandchild.pid"; wait"#);
+        let cancel = std::sync::Arc::new(AtomicBool::new(false));
+        let c2 = cancel.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            c2.store(true, Ordering::SeqCst);
+        });
+        let out = run_login(Engine::Codex, &bin, &dir, Duration::from_secs(60), &cancel, None, &mut |_| {});
+        assert_eq!(out, Outcome::Cancelled);
+        let pid: i32 = std::fs::read_to_string(dir.join("grandchild.pid")).unwrap().trim().parse().unwrap();
+        let mut gone = false;
+        for _ in 0..40 {
+            if unsafe { libc::kill(pid, 0) } != 0 {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(gone, "o processo filho sobreviveu ao cancelamento");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn cancel_stops_a_waiting_login_immediately() {
+        let _guard = FAKE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!("oneagent-login-cancel-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bin = fake_cli(&dir, "exec sleep 30");

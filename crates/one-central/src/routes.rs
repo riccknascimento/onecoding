@@ -362,6 +362,7 @@ pub fn router_with_settings(
         .route("/node/v1/tasks/{id}/events", post(task_event))
         .route("/node/v1/tasks/{id}/finish", post(finish_task))
         .merge(crate::executor::routes())
+        .merge(crate::cli_auth::routes())
         .merge(crate::events::routes())
         .with_state(AppState {
             pool,

@@ -99,10 +99,15 @@ pub fn detect_engine(
         EngineKind::Cursor => (&["status"], parse::auth_text),
     };
     let auth = host.run(&exe, auth_args, QUICK);
+    // o Codex informa "Not logged in" no stderr; os outros usam só a saída padrão
+    let auth_text = match engine {
+        EngineKind::Codex => format!("{}\n{}", auth.stdout, auth.stderr),
+        _ => auth.stdout.clone(),
+    };
     st.auth = if auth.timed_out() {
         AuthState::Unknown
     } else {
-        parse_auth(&auth.stdout)
+        parse_auth(&auth_text)
     };
 
     if with_models {
@@ -380,6 +385,7 @@ mod tests {
             );
             self.out.get(&key).cloned().unwrap_or(RunOutput {
                 stdout: String::new(),
+                stderr: String::new(),
                 outcome: Outcome::TimedOut,
             })
         }
@@ -388,6 +394,7 @@ mod tests {
     fn ok(s: &str) -> RunOutput {
         RunOutput {
             stdout: s.into(),
+            stderr: String::new(),
             outcome: Outcome::Exited(Some(0)),
         }
     }
