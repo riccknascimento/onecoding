@@ -34,7 +34,7 @@ Transformar o OneCoding Web em um espaço de trabalho com abas: Settings é a ab
 - `workspaces`: identidade, proprietário, nome e timestamps.
 - `workspace_contexts`: relação extensível com contextos OneNode/projeto; apenas um contexto ativo por Workspace na interface atual. Trocar contexto atualiza a seleção, sem apagar conversas.
 - `conversations.workspace_id`: associa cada conversa ao Workspace; mensagens, eventos, jobs e tarefas continuam ligados à conversa pelas relações existentes.
-- Migration aditiva: associa conversas existentes a um Workspace de compatibilidade por proprietário e inicializa o contexto do Workspace a partir da conversa mais recente. Nenhuma mensagem ou execução é removida.
+- Migration aditiva: associa conversas existentes a Workspaces de compatibilidade por proprietário e par OneNode/projeto, preservando contextos distintos; mensagens e execuções permanecem intactas.
 - API autenticada: listar/criar/renomear Workspaces, selecionar contexto de Workspace, filtrar conversas por Workspace e criar conversa dentro do Workspace. Requisições antigas sem `workspace_id` continuam sendo aceitas pelo Workspace de compatibilidade.
 - Interface: Settings fixo; lista de abas de Workspace, botão `+` com opções para abrir ou criar, fechar só a aba; Settings lista Workspaces disponíveis. Em Workspace, a sidebar mostra nome, Nova conversa e histórico desse Workspace.
 - Persistência local é limitada à lista de IDs abertos e ao ID da aba ativa. Os IDs são reconciliados com os Workspaces que o servidor retorna após login.

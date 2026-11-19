@@ -33,29 +33,32 @@ CREATE UNIQUE INDEX workspace_context_unique
 
 ALTER TABLE conversations ADD COLUMN workspace_id uuid;
 
--- Conversas existentes ficam num Workspace de compatibilidade do dono; mensagens e execuções não mudam.
-WITH owners AS (
-    SELECT DISTINCT owner_id FROM conversations
-), created AS (
-    INSERT INTO workspaces(owner_id, name)
-    SELECT owner_id, 'Workspace existente' FROM owners
-    RETURNING id, owner_id
-)
-UPDATE conversations c
-SET workspace_id = created.id
-FROM created
-WHERE c.owner_id = created.owner_id;
+-- Conversas antigas são agrupadas somente quando já compartilham o mesmo contexto OneNode/projeto.
+-- Assim projetos e servidores diferentes do mesmo usuário não acabam no mesmo Workspace.
+CREATE TEMP TABLE workspace_migration_map ON COMMIT DROP AS
+SELECT gen_random_uuid() AS workspace_id, owner_id, node_id, project_id
+FROM conversations
+GROUP BY owner_id, node_id, project_id;
 
--- O contexto padrão vem da conversa atualizada mais recentemente; os contextos históricos das conversas ficam intactos.
+INSERT INTO workspaces(id, owner_id, name)
+SELECT m.workspace_id, m.owner_id,
+       COALESCE(NULLIF(concat_ws(' · ', p.name, n.name), ''), 'Workspace existente')
+FROM workspace_migration_map m
+LEFT JOIN projects p ON p.id = m.project_id
+LEFT JOIN onenodes n ON n.id = m.node_id;
+
+UPDATE conversations c
+SET workspace_id = m.workspace_id
+FROM workspace_migration_map m
+WHERE c.owner_id = m.owner_id
+  AND c.node_id IS NOT DISTINCT FROM m.node_id
+  AND c.project_id IS NOT DISTINCT FROM m.project_id;
+
+-- Cada Workspace herdado inicia com seu próprio contexto; mensagens e execuções não mudam.
 INSERT INTO workspace_contexts(workspace_id, node_id, project_id, is_active)
-SELECT w.id, latest.node_id, latest.project_id, true
-FROM (
-    SELECT DISTINCT ON (owner_id) owner_id, node_id, project_id
-    FROM conversations
-    ORDER BY owner_id, updated_at DESC, id
-) latest
-JOIN workspaces w ON w.owner_id = latest.owner_id
-WHERE latest.node_id IS NOT NULL OR latest.project_id IS NOT NULL;
+SELECT workspace_id, node_id, project_id, true
+FROM workspace_migration_map
+WHERE node_id IS NOT NULL;
 
 -- A chave referenciada deve ser única; esta chave também impede ligar conversa ao Workspace de outro dono.
 ALTER TABLE workspaces ADD CONSTRAINT workspaces_id_owner_unique UNIQUE (id, owner_id);

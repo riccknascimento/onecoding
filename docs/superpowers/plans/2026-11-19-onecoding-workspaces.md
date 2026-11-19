@@ -27,7 +27,7 @@
 ## Review Focus
 
 - ID de Workspace de outro usuário: API retorna não encontrado, sem revelar existência.
-- Migração com conversas de vários usuários e contextos distintos: todas permanecem acessíveis e contexto histórico não é trocado.
+- Migração com conversas de vários usuários e contextos distintos: Workspaces são separados por proprietário e par OneNode/projeto; contexto histórico não é trocado.
 - Contexto revogado: seleção nova é recusada; conversa antiga continua histórica sem criar nova execução autorizada.
 - Um OneNode associado a vários projetos não deve compartilhar caminho, remoto, branch, credenciais ou permissão entre clientes; repositório e deploy não ampliam a autorização já existente.
 - Aba fechada e depois reaberta: histórico e tarefa em andamento continuam no servidor.
