@@ -49,7 +49,7 @@ export const CONFIG_ITEMS: { section?: SettingsSection; view?: CentralView; labe
 
 interface SidebarProps {
   view: CentralView;
-  settingsSection: SettingsSection;
+  settingsSection: SettingsSection | null;
   isAdmin: boolean;
   email: string;
   conversations: CentralConversation[];
@@ -84,12 +84,14 @@ function Group({ title, children, action }: { title: string; children: ReactNode
 
 export function Sidebar(p: SidebarProps) {
   return (
-    <aside className={`rail${p.open ? " open" : ""}`} aria-label="Navegação principal">
-      <div className="rail-head">
-        <span className="brand"><img src="/brand/onecoding-logo.png" alt="OneCoding" /></span>
-      </div>
-
-      <Group title={p.workspaces.find((workspace) => workspace.id === p.activeWorkspaceId)?.name ?? "Workspaces"}>
+    <aside id="studio-rail" className={`rail${p.open ? " open" : ""}`} aria-label="Navegação principal">
+      <div className="rail-sections">
+      {p.activeWorkspaceId ? (
+        <div className="rail-workspace">
+          <Icon name="projects" />
+          <div><small>Workspace</small><strong>{p.workspaces.find((item) => item.id === p.activeWorkspaceId)?.name}</strong></div>
+        </div>
+      ) : <Group title="Workspaces">
         <ul className="rail-list">
           {p.workspaces.map((workspace) => <li key={workspace.id}>
             <button type="button" className={`rail-item nav-item${workspace.id === p.activeWorkspaceId ? " active" : ""}`} onClick={() => p.onOpenWorkspace(workspace.id)}>
@@ -98,16 +100,12 @@ export function Sidebar(p: SidebarProps) {
           </li>)}
           {p.workspaces.length === 0 && <li className="rail-empty">Nenhum Workspace disponível.</li>}
         </ul>
-      </Group>
+      </Group>}
 
       {p.activeWorkspaceId && <Group
         title="Conversas"
-        action={
-          <button type="button" className="icon-btn" onClick={p.onNewConversation} aria-label="Nova conversa" title="Nova conversa">
-            <Icon name="plus" />
-          </button>
-        }
       >
+        <button type="button" className="new-chat" onClick={p.onNewConversation}><Icon name="plus" /> Nova conversa</button>
         {p.conversations.length === 0 ? (
           <p className="rail-empty">Nenhuma conversa ainda. Escreva no chat para começar.</p>
         ) : (
@@ -170,6 +168,7 @@ export function Sidebar(p: SidebarProps) {
         </Group>
       )}
 
+      </div>
       <div className="rail-foot">
         <span className="muted small" title={p.email}>{p.email}</span>
         <button type="button" className="btn" onClick={p.onLogout}>Sair</button>

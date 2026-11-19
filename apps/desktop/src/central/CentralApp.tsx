@@ -1,4 +1,5 @@
 // Interface Web do OneAgent (OneHub Central). Conversa, execução e estados vêm de eventos reais do OneHub.
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { OneHubError, webTransport } from "../transport";
 import type { CentralConversation, CentralExecutor, CentralGrant, CentralNode, CentralUser, OneHubTransport, StreamStatus, Subscription } from "../transport";
@@ -54,6 +55,19 @@ function isUnauthorized(e: unknown): boolean {
   return e instanceof OneHubError && e.status === 401;
 }
 
+function LoginLayout({ children }: { children: ReactNode }) {
+  return (
+    <main className="central-login">
+      <section className="central-login-brand" aria-label="Marca OneCoding">
+        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      </section>
+      <section className="central-login-panel" aria-label="Acesso ao OneCoding">
+        {children}
+      </section>
+    </main>
+  );
+}
+
 export function CentralApp({ transport = webTransport }: { transport?: OneHubTransport }) {
   const [user, setUser] = useState<CentralUser | null>(null);
   const [booting, setBooting] = useState(true);
@@ -77,6 +91,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [drawer, setDrawer] = useState(false);
   const [view, setView] = useState<CentralView>(() => (
     window.location.pathname === "/configuracoes/provider-ai"
@@ -306,6 +321,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   };
 
   const activateWorkspace = (id: OpenTab) => {
+    setDrawer(false);
     if (id === "settings") {
       setSettingsHome(true);
       setView("settings");
@@ -330,7 +346,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
       setView("chat");
       window.history.pushState({}, "", `/?workspace=${encodeURIComponent(workspace.id)}`);
     } catch (e) {
-      setError(errorText(e));
+      throw new Error(errorText(e));
     }
   };
 
@@ -339,7 +355,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
       const updated = await transport.renameWorkspace(id, name);
       setWorkspaces((items) => items.map((workspace) => workspace.id === id ? { ...workspace, ...updated } : workspace));
     } catch (e) {
-      setError(errorText(e));
+      throw new Error(errorText(e));
     }
   };
 
@@ -417,45 +433,46 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
 
   if (booting) {
     return (
-      <main className="central-login">
-        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      <LoginLayout>
         <p className="muted">Carregando…</p>
-      </main>
+      </LoginLayout>
     );
   }
 
   if (bootError && !user) {
     return (
-      <main className="central-login">
-        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
+      <LoginLayout>
         <p role="alert" className="error">OneHub Central indisponível. Verifique a conexão.</p>
         <button type="button" className="btn primary" onClick={() => setBootAttempt((n) => n + 1)}>
           Tentar de novo
         </button>
-      </main>
+      </LoginLayout>
     );
   }
 
   if (!user) {
     return (
-      <main className="central-login">
-        <img className="central-login-banner" src="/brand/onecoding-login-banner.png" alt="OneCoding — Plataforma de desenvolvimento inteligente" />
-        <p className="muted">Entre no OneCoding para conversar e acompanhar execuções nos seus OneNodes.</p>
+      <LoginLayout>
+        <div className="central-login-heading">
+          <img className="login-wordmark" src="/brand/onecoding-logo.png" alt="OneCoding" />
+          <h1>Bem-vindo de volta</h1>
+          <p className="muted">Entre para acessar seus Workspaces, conversas e execuções.</p>
+        </div>
         <form onSubmit={submitLogin} aria-label="Entrar no OneHub Central">
           <label>
             E-mail
-            <input type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input type="email" name="email" spellCheck={false} autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </label>
           <label>
             Senha
-            <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+            <input type="password" name="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           </label>
           <button type="submit" className="btn primary" disabled={busy}>
             {busy ? "Entrando…" : "Entrar"}
           </button>
         </form>
         {error && <p role="alert" className="error">{error}</p>}
-      </main>
+      </LoginLayout>
     );
   }
 
@@ -472,10 +489,16 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const ctxProjectId = active?.project_id ?? "";
 
   return (
-    <div className="chat-shell">
+    <div className={`chat-shell${railCollapsed ? " rail-collapsed" : ""}`}>
+      <header className="studio-bar">
+        <div className="studio-brand"><img src="/brand/onecoding-logo.png" alt="OneCoding" /></div>
+        <button type="button" className="icon-btn desktop-menu" aria-controls="studio-rail" aria-expanded={!railCollapsed} aria-label={railCollapsed ? "Expandir sidebar" : "Recolher sidebar"} onClick={() => setRailCollapsed(!railCollapsed)}><Icon name="sidebar" /></button>
+        <button type="button" className="icon-btn mobile-menu" aria-controls="studio-rail" aria-expanded={drawer} aria-label="Abrir menu" onClick={() => setDrawer(!drawer)}><Icon name="sidebar" /></button>
+        <WorkspaceTabs workspaces={workspaces} openTabs={openTabs} activeTab={shown === "chat" ? activeWorkspaceId ?? "" : "settings"} onActivate={activateWorkspace} onOpen={(id) => activateWorkspace(id)} onClose={closeWorkspaceTab} onCreate={createWorkspace} onRename={renameWorkspace} />
+      </header>
       <Sidebar
         view={shown}
-        settingsSection={settingsSection}
+        settingsSection={shown === "settings" && settingsHome ? null : settingsSection}
         isAdmin={isAdmin}
         email={user.email}
         conversations={workspaceConversations}
@@ -501,11 +524,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
 
       {shown === "chat" ? (
         <section className="chat-main">
-          <WorkspaceTabs workspaces={workspaces} openTabs={openTabs} activeTab={shown === "chat" ? activeWorkspaceId ?? "settings" : "settings"} onActivate={activateWorkspace} onOpen={(id) => activateWorkspace(id)} onClose={closeWorkspaceTab} onCreate={createWorkspace} onRename={renameWorkspace} />
           <header className="chat-top">
-            <button type="button" className="icon-btn rail-toggle" onClick={() => setDrawer((d) => !d)} aria-label="Abrir menu">
-              <Icon name="history" />
-            </button>
             <h1 className="chat-title">{active?.title ?? "Nova conversa"}</h1>
             <span className={`status-pill ${streamInfo.tone}`} aria-live="polite">
               <span className="dot" aria-hidden="true" />
@@ -529,11 +548,12 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
           {closedNote && <p role="status" className="notice banner">{closedNote}</p>}
 
           <ThreadView tick={tick}>
-            {messages.length === 0 && chat && (
+            {messages.length === 0 && (chat || !activeId) && (
               <div className="empty">
-                <h3>Peça uma análise</h3>
-                <p>Escreva o que quer investigar. Pedidos de leitura são executados pelo OneExecutor, somente leitura, no projeto escolhido.</p>
-                <p className="muted small">No contexto OneHub Central você administra o ambiente. Para analisar um projeto, escolha um OneNode com projeto autorizado.</p>
+                <span className="chat-glyph"><Icon name="chat" /></span>
+                <h2>Peça uma análise</h2>
+                <p>Escolha um projeto autorizado e descreva o que você quer investigar.</p>
+
               </div>
             )}
             {!chat && activeId && <p className="muted">Carregando conversa…</p>}
@@ -570,12 +590,6 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
         </section>
       ) : (
         <section className="chat-main">
-          <WorkspaceTabs workspaces={workspaces} openTabs={openTabs} activeTab="settings" onActivate={activateWorkspace} onOpen={(id) => activateWorkspace(id)} onClose={closeWorkspaceTab} onCreate={createWorkspace} onRename={renameWorkspace} />
-          <header className="chat-top page-top">
-            <button type="button" className="icon-btn rail-toggle" onClick={() => setDrawer((d) => !d)} aria-label="Abrir menu">
-              <Icon name="history" />
-            </button>
-          </header>
           <div className="page-scroll">
             {shown === "onenodes" && <OneNodesPage transport={transport} />}
             {shown === "provider" && <ProviderPage transport={transport} isAdmin={isAdmin} />}
@@ -586,7 +600,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
               <UnavailablePage
                 title="Agent"
                 icon="bot"
-                reason="Agentes especializados ainda não têm backend neste OneHub. Nenhum agente foi simulado."
+                reason="O cadastro de agentes especializados ainda não está disponível."
                 next="As execuções existentes aparecem em Execuções."
               />
             )}
@@ -594,7 +608,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
               <UnavailablePage
                 title="Plugins"
                 icon="plus"
-                reason="Plugins ainda não têm backend neste OneHub. Nenhum plugin foi simulado."
+                reason="A instalação de plugins ainda não está disponível."
                 next="Os motores disponíveis aparecem em One Provider AI."
               />
             )}
@@ -602,7 +616,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
               <UnavailablePage
                 title="MCP"
                 icon="gateway"
-                reason="Servidores MCP ainda não têm backend neste OneHub. Nenhum servidor foi simulado."
+                reason="A conexão a servidores MCP ainda não está disponível."
                 next="Os motores disponíveis aparecem em One Provider AI."
               />
             )}
@@ -612,15 +626,15 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
               <UnavailablePage
                 title="OneContext"
                 icon="book"
-                reason="Documentação, memória e contexto técnico ainda não têm backend neste OneHub. Nenhum conteúdo foi simulado."
+                reason="A biblioteca de documentos e contexto técnico ainda não está disponível."
                 next="Os projetos continuam disponíveis em Projetos."
               />
             )}
             {shown === "skills" && (
               <UnavailablePage
                 title="Skill"
-                icon="bot"
-                reason="Agentes, skills e ferramentas ainda não têm backend neste OneHub. Nenhum agente foi simulado."
+                icon="skills"
+                reason="O gerenciamento de skills ainda não está disponível."
                 next="As execuções existentes aparecem em Execuções."
               />
             )}

@@ -232,7 +232,7 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
           return (
             <div key={eng.id} className="prov-engine">
               <h3>{eng.label}</h3>
-              {list.length === 0 && <p className="muted small">Nenhuma conta cadastrada.</p>}
+              {accounts !== null && list.length === 0 && <p className="muted small">Nenhuma conta cadastrada.</p>}
               {list.length > 0 && (
                 <ul className="card-list" aria-label={`Contas ${eng.label}`}>
                   {list.map((c) => (

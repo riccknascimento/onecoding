@@ -26,17 +26,18 @@ export function SettingsHome({ nodes, executors, onSettings, onView }: {
   const activate = (label: SettingsSection | "Provider AI") => label === "Provider AI" ? onView("provider") : onSettings(label);
   return <main className="settings-home">
     <header className="settings-home-head"><div><h1>Settings</h1><p>Configuração global da plataforma OneCoding</p></div></header>
+    <h2 className="section-title">Infraestrutura e conexões</h2>
     <div className="settings-card-grid">
       {settings.map((item) => <button className="settings-card" type="button" key={item.label} onClick={() => activate(item.label)}>
         <span className="settings-card-icon"><Icon name={item.icon} /></span>
         <span className="settings-card-copy"><strong>{item.label === "OneExecutors" ? "Executors" : item.label === "OneNodes" ? "OneNode" : item.label}</strong><span>{item.description}</span>
           {item.label === "OneExecutors" && <small>{executors.filter((x) => x.status === "online").length} online</small>}
           {item.label === "OneNodes" && <small>{nodes.filter((x) => x.status === "online").length} online</small>}
-        </span><span className="settings-card-link">Configurar →</span>
+        </span><span className="settings-card-link"><Icon name="arrow" /></span>
       </button>)}
     </div>
     <section className="settings-resources"><header><Icon name="projects" /><div><h2>Recursos</h2><p>Gerencie os recursos disponíveis na plataforma.</p></div></header>
-      <div className="resource-card-grid">{resources.map((item) => <button type="button" key={item.view} onClick={() => onView(item.view)}><Icon name={item.icon} /><strong>{item.label}</strong><span>›</span></button>)}</div>
+      <div className="resource-card-grid">{resources.map((item) => <button type="button" key={item.view} onClick={() => onView(item.view)}><Icon name={item.icon} /><strong>{item.label}</strong><Icon name="arrow" /></button>)}</div>
     </section>
   </main>;
 }

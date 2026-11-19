@@ -21,6 +21,11 @@ const SNAP: ConversationSnapshot = {
 const ev = (seq: number, kind: StreamEvent["kind"], payload: Record<string, unknown>): StreamEvent => ({ seq, kind, payload });
 
 describe("estado do chat", () => {
+  it("apresenta a pergunta antes da resposta gravada no mesmo instante", () => {
+    const messages = [msg({ id: "a" }), msg({ id: "z", role: "user" })];
+    expect(fromSnapshot({ ...SNAP, messages }).messages.map((m) => m.id)).toEqual(["z", "a"]);
+  });
+
   it("snapshot ordena mensagens e monta a linha do tempo a partir da janela de eventos", () => {
     const s = fromSnapshot(SNAP);
     expect(s.messages.map((m) => m.id)).toEqual(["u1", "a1"]);

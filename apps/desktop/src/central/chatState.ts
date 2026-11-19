@@ -46,7 +46,13 @@ const TASK_LABEL: Record<CentralTaskStatus, { text: string; tone: Tone }> = {
 };
 
 function sortMessages(messages: CentralMessage[]): CentralMessage[] {
-  return [...messages].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id.localeCompare(b.id)));
+  return [...messages].sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+    // Um turno pode gravar a pergunta e a resposta no mesmo instante.
+    if (a.role === "user" && b.role !== "user") return -1;
+    if (b.role === "user" && a.role !== "user") return 1;
+    return a.id.localeCompare(b.id);
+  });
 }
 
 function upsertMessage(messages: CentralMessage[], msg: CentralMessage): CentralMessage[] {

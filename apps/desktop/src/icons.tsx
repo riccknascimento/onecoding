@@ -1,6 +1,11 @@
 import type { ReactNode } from "react";
 
 const paths = {
+  sidebar: <><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></>,
+  edit: <path d="m14 5 5 5M4 20l5-1L20 8l-5-5L4 14v6Z" />,
+  close: <path d="m6 6 12 12M18 6 6 18" />,
+  arrow: <path d="M5 12h14m-6-6 6 6-6 6" />,
+
   chat: <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12Z" />,
   gateway: (
     <>

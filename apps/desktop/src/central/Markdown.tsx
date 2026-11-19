@@ -14,6 +14,8 @@ function textOf(node: ReactNode): string {
 
 function CodeBlock({ children }: { children?: ReactNode }) {
   const [copied, setCopied] = useState(false);
+  const language = isValidElement<{ className?: string }>(children)
+    ? children.props.className?.match(/language-([\w+-]+)/)?.[1] : undefined;
   const code = textOf(children).replace(/\n$/, "");
   const copy = async () => {
     try {
@@ -27,6 +29,7 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   return (
     <div className="code-block">
       <div className="code-head">
+        <span>{language ?? "Código"}</span>
         <button type="button" className="btn code-copy" onClick={copy} aria-label="Copiar código">
           {copied ? "Copiado" : "Copiar"}
         </button>

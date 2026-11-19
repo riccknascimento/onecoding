@@ -165,7 +165,7 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     expect(await screen.findByRole("button", { name: /Plano/ })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "OneNode" })).toHaveDisplayValue("OneHub Central (administração)");
     expect(screen.getByText(/Codex CLI \(OneExecutor\): online/)).toBeInTheDocument();
-    expect(screen.getByText(/Orquestrador · indisponível/)).toBeInTheDocument();
+    expect(screen.getByText(/VibeAgent · indisponível/)).toBeInTheDocument();
     expect(document.body.textContent?.toLowerCase()).not.toContain("demo");
   });
 

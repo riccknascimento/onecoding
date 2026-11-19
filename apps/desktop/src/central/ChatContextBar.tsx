@@ -160,10 +160,10 @@ export function ChatContextBar(p: Props) {
       <div className="cx-mode">
         <div className="cx-segments" role="group" aria-label="Modo da conversa">
           <span className="mode-chip disabled" aria-disabled="true" title="O OneOrchestrator com ChatGPT não roda neste Central">
-            Orquestrador · indisponível
+            VibeAgent · indisponível
           </span>
           <span className={`mode-chip${blocked ? " disabled" : " active"}`} aria-current={blocked ? undefined : "true"}>
-            Direto {blocked ? "· indisponível" : "· ativo"}
+            Coding · {blocked ? "indisponível" : "análise de leitura"}
           </span>
         </div>
         {blocked ? (
