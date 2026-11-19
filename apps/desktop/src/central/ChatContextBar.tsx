@@ -27,13 +27,47 @@ interface Props {
   onOpenOneNodes(): void;
 }
 
+/**
+ * Pronto = algum online com relatório de Codex instalado+autenticado+aprovado.
+ * Sem campo `engines` (payload antigo) = desconhecido: não bloqueia só por autenticação.
+ */
+export function codexReady(executors: CentralExecutor[]): boolean | "unknown" {
+  const online = executors.filter((x) => x.status === "online");
+  if (online.length === 0) return false;
+  const reported = online.filter((x) => Array.isArray(x.engines));
+  if (reported.length === 0) return "unknown";
+  return reported.some((x) =>
+    (x.engines ?? []).some((e) => e.name === "codex" && e.installed && e.authenticated && e.approved),
+  );
+}
+
 /** Motivo que impede a análise direta neste contexto, ou null quando ela pode ser pedida. */
-export function directBlockReason(p: { node: CentralNode | null; grants: CentralGrant[]; executorOnline: boolean; projectId: string }): string | null {
+export function directBlockReason(p: {
+  node: CentralNode | null;
+  grants: CentralGrant[];
+  executorOnline: boolean;
+  projectId: string;
+  executors?: CentralExecutor[];
+}): string | null {
   if (!p.node) return "Contexto OneHub Central: administração do ambiente, sem análise de projeto.";
   if (p.node.status === "revoked") return "Este OneNode foi revogado.";
   if (p.node.suspended) return "Este OneNode está suspenso até ser retomado.";
   if (p.grants.length === 0) return "Este OneNode está conectado, mas sem projetos autorizados.";
   if (!p.executorOnline) return "Nenhum OneExecutor (Codex) está online neste Central.";
+  if (p.executors) {
+    const ready = codexReady(p.executors);
+    if (ready === false) {
+      const reports = p.executors.filter((x) => x.status === "online").flatMap((x) => x.engines ?? []);
+      const codex = reports.find((e) => e.name === "codex");
+      if (codex?.installed && !codex.authenticated) {
+        return "O OneExecutor está online, mas o Codex CLI ainda não está autenticado. Conecte a conta em One Provider AI.";
+      }
+      if (codex?.installed && codex.authenticated && !codex.approved) {
+        return "O Codex CLI está instalado, mas ainda não foi aprovado neste OneExecutor.";
+      }
+      return "O OneExecutor está online, mas o Codex CLI não está pronto para execução.";
+    }
+  }
   if (!p.projectId && p.grants.length > 1) return "Escolha o projeto para a análise.";
   return null;
 }
@@ -46,12 +80,29 @@ export function ChatContextBar(p: Props) {
   const node = p.nodes.find((n) => n.id === p.nodeId) ?? null;
   const nodeGrants = p.grants.filter((g) => g.node_id === p.nodeId);
   const executorOnline = p.executors.some((x) => x.status === "online");
-  const executorText = p.executors.length === 0 ? "nenhum cadastrado" : executorOnline ? "online" : "offline";
-  const blocked = directBlockReason({ node, grants: nodeGrants, executorOnline, projectId: p.projectId });
+  const ready = codexReady(p.executors);
+  const executorText =
+    p.executors.length === 0
+      ? "nenhum cadastrado"
+      : !executorOnline
+        ? "offline"
+        : ready === true
+          ? "online · Codex autenticado"
+          : ready === "unknown"
+            ? "online"
+            : "online · Codex sem autenticação";
+  const blocked = directBlockReason({
+    node,
+    grants: nodeGrants,
+    executorOnline,
+    projectId: p.projectId,
+    executors: p.executors,
+  });
   const state = node ? nodeStateText(node) : null;
   const tone: Tone = state ? state.tone : "central";
   const projectName = nodeGrants.find((g) => g.project_id === p.projectId)?.project_name ?? "Automático";
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const motorTone: Tone = ready === true ? "ok" : executorOnline ? (ready === "unknown" ? "ok" : "warn") : "bad";
 
   return (
     <section className={`ctx-panel cx tone-${tone}`} aria-label="Contexto do chat">
@@ -126,7 +177,7 @@ export function ChatContextBar(p: Props) {
         <div>
           <dt>Motor</dt>
           <dd>
-            <Dot tone={executorOnline ? "ok" : "bad"} />
+            <Dot tone={motorTone} />
             Codex CLI (OneExecutor): {executorText}
           </dd>
         </div>

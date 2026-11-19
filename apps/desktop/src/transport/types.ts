@@ -109,11 +109,21 @@ export interface CentralTaskSummary {
   updated_at: string;
 }
 
+/** Estado do motor reportado pelo OneExecutor no heartbeat (sem credenciais). */
+export interface CentralEngineReport {
+  name: string;
+  installed: boolean;
+  authenticated: boolean;
+  approved: boolean;
+  version?: string | null;
+}
+
 export interface CentralExecutor {
   id: string;
   name: string;
   engine: string;
   status: "online" | "offline" | "pending" | "revoked";
+  engines?: CentralEngineReport[];
 }
 
 export type CliEngine = "codex" | "claude" | "cursor";

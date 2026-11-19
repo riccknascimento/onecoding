@@ -195,7 +195,10 @@ async fn list_executors(
 ) -> Result<Json<Value>, ApiError> {
     let client = db(&s).await?;
     let rows = client
-        .query("SELECT id, name, engine, paired_at, last_seen_at, revoked_at FROM executors ORDER BY created_at", &[])
+        .query(
+            "SELECT id, name, engine, paired_at, last_seen_at, revoked_at, engines FROM executors ORDER BY created_at",
+            &[],
+        )
         .await?;
     let list: Vec<Value> = rows
         .iter()
@@ -203,6 +206,7 @@ async fn list_executors(
             let paired: Option<DateTime<Utc>> = r.get(3);
             let last: Option<DateTime<Utc>> = r.get(4);
             let revoked: Option<DateTime<Utc>> = r.get(5);
+            let engines: Value = r.get(6);
             let status = if revoked.is_some() {
                 "revoked"
             } else if paired.is_none() {
@@ -212,7 +216,13 @@ async fn list_executors(
             } else {
                 "offline"
             };
-            json!({ "id": r.get::<_, Uuid>(0), "name": r.get::<_, String>(1), "engine": r.get::<_, String>(2), "status": status })
+            json!({
+                "id": r.get::<_, Uuid>(0),
+                "name": r.get::<_, String>(1),
+                "engine": r.get::<_, String>(2),
+                "status": status,
+                "engines": engines,
+            })
         })
         .collect();
     Ok(Json(json!(list)))
@@ -662,6 +672,8 @@ async fn get_job(
 pub const CENTRAL_CONTEXT_MESSAGE: &str = "Contexto OneHub Central: administração do ambiente. Este contexto não analisa projetos. Para analisar um projeto, escolha um OneNode com projeto autorizado.";
 pub const NO_PROJECTS_MESSAGE: &str = "Este OneNode está conectado, mas não tem projetos autorizados. Peça ao administrador uma concessão na página OneNodes.";
 pub const NO_EXECUTOR_MESSAGE: &str = "Nenhum OneExecutor (Codex) está online neste Central, então a análise não pode ser executada agora. A conversa continua disponível.";
+pub const CODEX_NOT_AUTHENTICATED_MESSAGE: &str = "O OneExecutor está online, mas o Codex CLI ainda não está autenticado. Conecte a conta em One Provider AI e tente de novo.";
+pub const CODEX_NOT_APPROVED_MESSAGE: &str = "O Codex CLI está instalado neste OneExecutor, mas ainda não foi aprovado para execução.";
 
 /// Há um OneExecutor pareado, não revogado e com sinal recente (mesma janela de presença dos OneNodes).
 /// Executor pronto para `engine`: pareado, não revogado, com sinal e relatório recentes, e o motor
@@ -679,6 +691,37 @@ pub(crate) async fn executor_ready<C: GenericClient>(client: &C, engine: &str) -
         )
         .await?;
     Ok(row.is_some())
+}
+
+/// Motivo determinístico quando o motor existe online, mas ainda não pode executar.
+pub(crate) async fn executor_block_reason<C: GenericClient>(client: &C, engine: &str) -> Result<&'static str, ApiError> {
+    if executor_ready(client, engine).await? {
+        return Ok("");
+    }
+    let rows = client
+        .query(
+            "SELECT x->>'installed', x->>'authenticated', x->>'approved' \
+             FROM executors e, jsonb_array_elements(e.engines) x \
+             WHERE e.revoked_at IS NULL AND e.paired_at IS NOT NULL \
+             AND e.last_seen_at > now() - ($1::int * interval '1 second') \
+             AND e.engines_reported_at > now() - ($1::int * interval '1 second') \
+             AND x->>'name' = $2",
+            &[&(EXECUTOR_ONLINE_WINDOW as i32), &engine],
+        )
+        .await?;
+    if rows.is_empty() {
+        return Ok(NO_EXECUTOR_MESSAGE);
+    }
+    let any_installed = rows.iter().any(|r| r.get::<_, String>(0) == "true");
+    let any_authenticated = rows.iter().any(|r| r.get::<_, String>(1) == "true");
+    let any_approved = rows.iter().any(|r| r.get::<_, String>(2) == "true");
+    if any_installed && !any_authenticated {
+        return Ok(CODEX_NOT_AUTHENTICATED_MESSAGE);
+    }
+    if any_installed && any_authenticated && !any_approved {
+        return Ok(CODEX_NOT_APPROVED_MESSAGE);
+    }
+    Ok(NO_EXECUTOR_MESSAGE)
 }
 
 /// Estados de motor de todos os executores prontos para receber tarefas (a base da seleção de agentes).
@@ -758,13 +801,10 @@ pub async fn analysis_turn<C: GenericClient>(
             None,
         ));
     }
-    // Sem OneExecutor online, nada é enfileirado: o chat não promete uma execução que não pode acontecer.
-    if !executor_ready(client, "codex").await? {
-        return Ok((
-            "rejected",
-            NO_EXECUTOR_MESSAGE.into(),
-            None,
-        ));
+    // Sem motor Codex pronto, nada é enfileirado: o chat não promete uma execução que não pode acontecer.
+    let block = executor_block_reason(client, "codex").await?;
+    if !block.is_empty() {
+        return Ok(("rejected", block.into(), None));
     }
     let open: i64 = client
         .query_one(
