@@ -484,7 +484,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const tick = chat ? `${chat.lastSeq}:${messages.length}:${Object.values(chat.jobs).map((j) => `${j.status}${j.timeline.length}`).join(",")}` : null;
 
   const isAdmin = user.role === "admin";
-  const shown: CentralView = (view === "onenodes" || view === "settings" || view === "provider") && !isAdmin ? "chat" : view;
+  const shown: CentralView = (view === "onenodes" || (view === "settings" && !settingsHome) || view === "provider") && !isAdmin ? "chat" : view;
   const ctxNodeId = active?.node_id ?? CENTRAL_OPTION;
   const ctxProjectId = active?.project_id ?? "";
 
@@ -594,7 +594,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
             {shown === "onenodes" && <OneNodesPage transport={transport} />}
             {shown === "provider" && <ProviderPage transport={transport} isAdmin={isAdmin} />}
             {shown === "settings" && (settingsHome
-              ? <SettingsHome nodes={nodes} executors={executors} onSettings={openSettings} onView={navigate} />
+              ? <SettingsHome isAdmin={isAdmin} nodes={nodes} executors={executors} onSettings={openSettings} onView={navigate} />
               : <AdminPanel transport={transport} user={user} section={settingsSection} onSection={openSettings} />)}
             {shown === "agents" && (
               <UnavailablePage

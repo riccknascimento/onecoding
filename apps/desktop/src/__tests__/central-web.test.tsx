@@ -180,6 +180,13 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
     expect(await screen.findByRole("button", { name: /Plano/ })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "OneNode" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Workspaces" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Conversas" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Recursos" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Configurações" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Settings" }));
+    expect(screen.queryByRole("button", { name: "Conversas" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Configurações" })).toBeInTheDocument();
     const resources = screen.getByRole("button", { name: "Recursos" });
     expect(resources).toHaveAttribute("aria-expanded", "true");
     await userEvent.click(resources);
@@ -193,7 +200,8 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     window.history.replaceState({}, "", "/");
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "OneNode" }));
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "OneNode" }));
     expect(window.location.pathname).toBe("/configuracoes/OneNodes");
     await user.click(screen.getAllByRole("button", { name: "Meu Workspace" })[0]!);
     await user.click(screen.getByRole("button", { name: "Nova conversa" }));
@@ -204,7 +212,8 @@ describe("OneAgent Web (OneHub Central): tela", () => {
   it("voltar e avançar do navegador acompanham a seção de configuração", async () => {
     window.history.replaceState({}, "", "/");
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER) })} />);
-    await userEvent.click(await screen.findByRole("button", { name: "Executors" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Executors" }));
     expect(await screen.findByRole("heading", { name: "OneExecutors" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/configuracoes/OneExecutors");
     act(() => {
@@ -475,7 +484,8 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     const t = fakeTransport({ me: vi.fn(async () => USER) });
     const user = userEvent.setup();
     render(<CentralApp transport={t} />);
-    await user.click(await screen.findByRole("button", { name: "OneNode" }));
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "OneNode" }));
     expect(await screen.findByRole("heading", { name: "OneNodes" })).toBeInTheDocument();
     expect(window.location.pathname).toBe("/configuracoes/OneNodes");
     await user.click(screen.getByRole("button", { name: "Adicionar OneNode" }));
@@ -491,7 +501,8 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     const t = fakeTransport({ me: vi.fn(async () => USER) });
     const user = userEvent.setup();
     render(<CentralApp transport={t} />);
-    await user.click(await screen.findByRole("button", { name: "OneNode" }));
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "OneNode" }));
     expect(await screen.findByRole("heading", { level: 2, name: "OneNodes" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Adicionar OneNode" })).toBeInTheDocument();
     expect(t.nodes).toHaveBeenCalled();
@@ -507,7 +518,9 @@ describe("OneCoding: configurações e estado do Realtime", () => {
   it("membro não vê Configurações e o painel recusa o acesso", async () => {
     const member = { id: "u2", email: "membro@teste.local", role: "member" as const };
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => member) })} />);
-    await screen.findByRole("button", { name: /Plano/ });
+    await userEvent.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Recursos" })).toBeInTheDocument();
+    expect(screen.queryByText("Infraestrutura e conexões")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Configurações" })).not.toBeInTheDocument();
   });
 
@@ -516,7 +529,8 @@ describe("OneCoding: configurações e estado do Realtime", () => {
     const user = userEvent.setup();
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<CentralApp transport={fakeTransport({ me: vi.fn(async () => USER), ...{} })} />);
-    await user.click(await screen.findByRole("button", { name: "OneNode" }));
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "OneNode" }));
     await user.click((await screen.findAllByRole("button", { name: "Revogar" }))[0]!);
     expect(window.confirm).toHaveBeenCalled();
     expect(t.revokeNode).not.toHaveBeenCalled();

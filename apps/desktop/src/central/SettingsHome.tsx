@@ -17,7 +17,8 @@ const resources: { label: string; view: CentralView; icon: IconName }[] = [
   { label: "Context", view: "context", icon: "book" },
 ];
 
-export function SettingsHome({ nodes, executors, onSettings, onView }: {
+export function SettingsHome({ isAdmin, nodes, executors, onSettings, onView }: {
+  isAdmin: boolean;
   nodes: CentralNode[];
   executors: CentralExecutor[];
   onSettings(section: SettingsSection): void;
@@ -26,6 +27,7 @@ export function SettingsHome({ nodes, executors, onSettings, onView }: {
   const activate = (label: SettingsSection | "Provider AI") => label === "Provider AI" ? onView("provider") : onSettings(label);
   return <main className="settings-home">
     <header className="settings-home-head"><div><h1>Settings</h1><p>Configuração global da plataforma OneCoding</p></div></header>
+    {isAdmin && <section>
     <h2 className="section-title">Infraestrutura e conexões</h2>
     <div className="settings-card-grid">
       {settings.map((item) => <button className="settings-card" type="button" key={item.label} onClick={() => activate(item.label)}>
@@ -36,6 +38,7 @@ export function SettingsHome({ nodes, executors, onSettings, onView }: {
         </span><span className="settings-card-link"><Icon name="arrow" /></span>
       </button>)}
     </div>
+    </section>}
     <section className="settings-resources"><header><Icon name="projects" /><div><h2>Recursos</h2><p>Gerencie os recursos disponíveis na plataforma.</p></div></header>
       <div className="resource-card-grid">{resources.map((item) => <button type="button" key={item.view} onClick={() => onView(item.view)}><Icon name={item.icon} /><strong>{item.label}</strong><Icon name="arrow" /></button>)}</div>
     </section>

@@ -1,5 +1,3 @@
-// Navegação do OneCoding Web: grupos recolhíveis. Conversas no topo; depois recursos; depois configurações
-// (somente administradores). Módulos sem backend aparecem como indisponíveis dentro da própria página.
 import { useState } from "react";
 import type { ReactNode } from "react";
 import type { CentralConversation } from "../transport";
@@ -86,21 +84,16 @@ export function Sidebar(p: SidebarProps) {
   return (
     <aside id="studio-rail" className={`rail${p.open ? " open" : ""}`} aria-label="Navegação principal">
       <div className="rail-sections">
-      {p.activeWorkspaceId ? (
-        <div className="rail-workspace">
-          <Icon name="projects" />
-          <div><small>Workspace</small><strong>{p.workspaces.find((item) => item.id === p.activeWorkspaceId)?.name}</strong></div>
-        </div>
-      ) : <Group title="Workspaces">
+      <Group title="Workspaces">
         <ul className="rail-list">
           {p.workspaces.map((workspace) => <li key={workspace.id}>
-            <button type="button" className={`rail-item nav-item${workspace.id === p.activeWorkspaceId ? " active" : ""}`} onClick={() => p.onOpenWorkspace(workspace.id)}>
+            <button type="button" className={`rail-item nav-item${workspace.id === p.activeWorkspaceId ? " active" : ""}`} aria-current={workspace.id === p.activeWorkspaceId ? "page" : undefined} onClick={() => p.onOpenWorkspace(workspace.id)}>
               <Icon name="projects" /><span className="rail-title">{workspace.name}</span>
             </button>
           </li>)}
           {p.workspaces.length === 0 && <li className="rail-empty">Nenhum Workspace disponível.</li>}
         </ul>
-      </Group>}
+      </Group>
 
       {p.activeWorkspaceId && <Group
         title="Conversas"
@@ -129,7 +122,7 @@ export function Sidebar(p: SidebarProps) {
         )}
       </Group>}
 
-      <Group title="Recursos">
+      {p.view !== "chat" && <Group title="Recursos">
         <ul className="rail-list">
           {RESOURCE_ITEMS.map((i) => {
             const active = p.view === i.view;
@@ -143,9 +136,9 @@ export function Sidebar(p: SidebarProps) {
             );
           })}
         </ul>
-      </Group>
+      </Group>}
 
-      {p.isAdmin && (
+      {p.view !== "chat" && p.isAdmin && (
         <Group title="Configurações">
           <ul className="rail-list">
             {CONFIG_ITEMS.map((i) => {
