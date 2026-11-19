@@ -27,6 +27,7 @@ const gateway: GatewayInfo = {
       fingerprint: "ab12",
       models: [{ id: "example-model", label: null, source: "catalog", confirmed: true }],
       note: null,
+      execution_block: null,
     },
   ],
   demo: false,

@@ -14,6 +14,7 @@ const engine = (over: Partial<EngineStatus>): EngineStatus => ({
   fingerprint: "abc123",
   models: [],
   note: "executável ainda não aprovado",
+  execution_block: null,
   ...over,
 });
 

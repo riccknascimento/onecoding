@@ -29,7 +29,7 @@ const ws: Workspace = { id: "ws1", gateway_id: "local", label: "projeto", path: 
 
 const codex = (trust: EngineStatus["trust"]): EngineStatus => ({
   engine: "codex", installed: true, path: "/x/codex", version: "0.1", auth: "logged_in", trust,
-  fingerprint: "ab", models: [], note: null,
+  fingerprint: "ab", models: [], note: null, execution_block: null,
 });
 
 const local = (trust: EngineStatus["trust"]): LocalGatewayState => {
