@@ -46,7 +46,12 @@ export function createHttpTransport(base = DEFAULT_API_BASE): OneHubTransport {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (res.status === 204) return undefined as T;
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    let data: Record<string, unknown>;
+    try {
+      data = (await res.json()) as Record<string, unknown>;
+    } catch {
+      throw new OneHubError(res.status, "invalid_response");
+    }
     if (!res.ok) throw new OneHubError(res.status, typeof data.error === "string" ? data.error : "erro");
     return data as T;
   }
