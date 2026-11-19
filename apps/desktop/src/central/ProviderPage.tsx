@@ -2,6 +2,7 @@
 // Todo estado vem do OneHub. O login oficial roda no OneExecutor; a página só mostra o link, o código e o progresso.
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { Icon } from "../icons";
 import { OneHubError } from "../transport";
 import type {
   ApiProvider,
@@ -119,48 +120,25 @@ function AccountCard({
   c,
   isAdmin,
   onAction,
-  onCancel,
-  onCode,
   onUsage,
   onRemove,
 }: {
   c: CliConnection;
   isAdmin: boolean;
-  onAction(id: string, action: "login" | "status" | "logout"): Promise<void>;
-  onCancel(sessionId: string): Promise<void>;
-  onCode(sessionId: string, code: string): Promise<void>;
-  onUsage(id: string, allowed: boolean): Promise<void>;
-  onRemove(id: string): Promise<void>;
+  onAction(id: string, action: "login" | "status" | "logout"): Promise<unknown>;
+  onUsage(id: string, allowed: boolean): Promise<unknown>;
+  onRemove(id: string): Promise<unknown>;
 }) {
-  const st = accountState(c);
   const active = !!c.session && ACTIVE.includes(c.session.state);
-  return (
-    <li className="card prov-account">
-      <div className="card-head">
-        <strong>{c.name}</strong>
-        <span className={`status-pill ${st.tone === "ok" ? "ok" : st.tone === "bad" ? "bad" : st.tone === "warn" ? "warn" : ""}`}>{st.text}</span>
-      </div>
-      <p className="muted small">OneExecutor: {c.executor_name} · uso autorizado: {c.usage_authorized ? "sim" : "não"}</p>
-      {c.auth_checked_at && <p className="muted small">Última verificação: {new Date(c.auth_checked_at).toLocaleString("pt-BR")}</p>}
-      {c.session && c.session.state !== "succeeded" && !active && (
-        <p className="muted small">Última operação: {c.session.result ?? c.session.state}</p>
-      )}
-      {c.session && active && (
-        <Session session={c.session} onCancel={() => onCancel(c.session!.id)} onCode={(code) => onCode(c.session!.id, code)} />
-      )}
-      {isAdmin && (
-        <div className="prov-actions">
-          <button type="button" className="btn" disabled={active} onClick={() => onAction(c.id, "login")}>Conectar conta</button>
-          <button type="button" className="btn ghost" disabled={active} onClick={() => onAction(c.id, "status")}>Verificar</button>
-          <button type="button" className="btn ghost" disabled={active || c.auth_state !== "authenticated"} onClick={() => onAction(c.id, "logout")}>Desconectar</button>
-          <button type="button" className="btn ghost" disabled={active || c.auth_state === "authenticated"} onClick={() => onRemove(c.id)}>Remover</button>
-          <button type="button" className="btn ghost" onClick={() => onUsage(c.id, !c.usage_authorized)}>
-            {c.usage_authorized ? "Revogar uso" : "Autorizar uso"}
-          </button>
-        </div>
-      )}
-    </li>
-  );
+  return isAdmin ? (
+    <div className="prov-actions">
+      <button type="button" className="btn" disabled={active} onClick={() => onAction(c.id, "login")}>Conectar</button>
+      <button type="button" className="btn ghost" disabled={active} onClick={() => onAction(c.id, "status")}>Verificar</button>
+      <button type="button" className="btn ghost" disabled={active || c.auth_state !== "authenticated"} onClick={() => onAction(c.id, "logout")}>Desconectar</button>
+      <button type="button" className="btn ghost" disabled={active || c.auth_state === "authenticated"} onClick={() => onRemove(c.id)}>Remover</button>
+      <button type="button" className="btn ghost" onClick={() => onUsage(c.id, !c.usage_authorized)}>{c.usage_authorized ? "Revogar uso" : "Autorizar uso"}</button>
+    </div>
+  ) : null;
 }
 
 export function ProviderPage({ transport, isAdmin }: { transport: OneHubTransport; isAdmin: boolean }) {
@@ -169,10 +147,20 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
   const [executors, setExecutors] = useState<CentralExecutor[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [adding, setAdding] = useState<"choose" | "cli" | "api" | null>(null);
 
   const loadAccounts = useCallback(async () => {
     setAccounts(await transport.cliConnections());
   }, [transport]);
+
+  const loadConnections = useCallback(async () => {
+    const [cli, api] = await Promise.all([
+      transport.cliConnections(),
+      isAdmin ? transport.providerConnections() : Promise.resolve([] as ProviderConnection[]),
+    ]);
+    setAccounts(cli);
+    setApis(api);
+  }, [transport, isAdmin]);
 
   useEffect(() => {
     let alive = true;
@@ -203,84 +191,78 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
     return () => clearInterval(t);
   }, [anyActive, loadAccounts]);
 
-  async function run(work: () => Promise<unknown>, ok?: string) {
+  async function run(work: () => Promise<unknown>, ok?: string): Promise<boolean> {
     setError(null);
     setNotice(null);
     try {
       await work();
       if (ok) setNotice(ok);
-      await loadAccounts();
+      await loadConnections();
+      return true;
     } catch (e) {
       setError(errorMessage(e));
+      return false;
     }
   }
 
+  const rows = [
+    ...(accounts ?? []).map((connection) => ({
+      id: connection.id,
+      name: connection.name,
+      type: ENGINES.find((engine) => engine.id === connection.engine)?.label ?? connection.engine,
+      executor: connection.executor_name,
+      state: accountState(connection),
+      detail: connection.session && ACTIVE.includes(connection.session.state)
+        ? <Session session={connection.session} onCancel={() => void run(() => transport.cancelCliSession(connection.session!.id))} onCode={(code) => transport.submitCliCode(connection.session!.id, code).then(loadAccounts)} />
+        : null,
+      actions: <AccountCard
+        c={connection}
+        isAdmin={isAdmin}
+        onAction={(id, action) => run(() => transport.startCliAction(id, action), action === "login" ? "Login iniciado." : undefined)}
+        onUsage={(id, allowed) => run(() => transport.setCliUsage(id, allowed))}
+        onRemove={(id) => run(() => transport.deleteCliConnection(id), "Conta removida.")}
+      />,
+    })),
+    ...(apis ?? []).map((connection) => ({
+      id: connection.id,
+      name: connection.name,
+      type: PROVIDERS.find((provider) => provider.id === connection.provider)?.label ?? connection.provider,
+      executor: "API",
+      state: { text: "Configurada", tone: "info" as const },
+      detail: <p className="muted small">Chave: <code>{connection.key_hint}</code>{connection.default_model ? ` · modelo: ${connection.default_model}` : ""}. O teste de conexão não está disponível.</p>,
+      actions: isAdmin ? <button type="button" className="btn ghost" onClick={() => void run(() => transport.deleteProviderConnection(connection.id), "Conexão removida.")}>Remover</button> : null,
+    })),
+  ];
+
   return (
-    <div className="page prov-page">
-      <PageHeader
-        title="One Provider AI"
-        subtitle="Contas de IA conectadas ao OneHub. O login de cada CLI acontece pelo fluxo oficial do fornecedor, executado no OneExecutor."
-      />
+    <div className="page provider-page">
+      <PageHeader title="One Provider AI" subtitle="Gerencie as contas CLI e conexões API usadas pelo OneCoding." actions={isAdmin ? <button className="btn primary provider-add" type="button" onClick={() => setAdding("choose")}><Icon name="plus" /> Adicionar Provider</button> : undefined} />
       {error && <p role="alert" className="error">{error}</p>}
       {notice && <p role="status" className="muted small">{notice}</p>}
-
-      <section aria-label="Provedores por CLI" className="prov-section">
-        <h2>Contas de CLI</h2>
-        {accounts === null && !error && <p className="muted">Carregando contas…</p>}
-        {ENGINES.map((eng) => {
-          const list = (accounts ?? []).filter((c) => c.engine === eng.id);
-          return (
-            <div key={eng.id} className="prov-engine">
-              <h3>{eng.label}</h3>
-              {accounts !== null && list.length === 0 && <p className="muted small">Nenhuma conta cadastrada.</p>}
-              {list.length > 0 && (
-                <ul className="card-list" aria-label={`Contas ${eng.label}`}>
-                  {list.map((c) => (
-                    <AccountCard
-                      key={c.id}
-                      c={c}
-                      isAdmin={isAdmin}
-                      onAction={(id, action) => run(() => transport.startCliAction(id, action), action === "login" ? "Login iniciado. Acompanhe abaixo." : undefined)}
-                      onCancel={(sid) => run(() => transport.cancelCliSession(sid), "Cancelamento solicitado.")}
-                      onCode={(sid, code) => transport.submitCliCode(sid, code).then(() => loadAccounts())}
-                      onUsage={(id, allowed) => run(() => transport.setCliUsage(id, allowed))}
-                      onRemove={(id) => run(() => transport.deleteCliConnection(id), "Conta removida.")}
-                    />
-                  ))}
-                </ul>
-              )}
-            </div>
-          );
-        })}
-
-        {isAdmin && <AddAccount executors={executors} onCreate={(input) => run(() => transport.createCliConnection(input), "Conta criada. Use Conectar conta para entrar.")} />}
-      </section>
-
-      <section aria-label="Conexões por API" className="prov-section">
-        <h2>Conexões por API</h2>
-        <p className="muted small">
-          A chave é cifrada no OneHub e nunca volta ao navegador. Teste de conexão e lista de modelos ainda dependem de chaves reais dos provedores e não estão disponíveis neste Central.
-        </p>
-        {apis === null && !error && isAdmin && <p className="muted">Carregando conexões…</p>}
-        {apis && apis.length > 0 && (
-          <ul className="card-list" aria-label="Conexões por API">
-            {apis.map((p) => (
-              <li key={p.id} className="card prov-api">
-                <div className="card-head">
-                  <strong>{p.name}</strong>
-                  <span className="status-pill">{PROVIDERS.find((x) => x.id === p.provider)?.label ?? p.provider}</span>
-                </div>
-                <p className="muted small">Chave: <code>{p.key_hint}</code>{p.default_model ? ` · modelo padrão: ${p.default_model}` : ""}</p>
-                {isAdmin && (
-                  <button type="button" className="btn ghost" onClick={() => run(() => transport.deleteProviderConnection(p.id), "Conexão removida.")}>Remover</button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {apis && apis.length === 0 && <p className="muted small">Nenhuma conexão por API cadastrada.</p>}
-        {isAdmin && <AddApi onCreate={(input) => run(() => transport.createProviderConnection(input), "Conexão guardada de forma cifrada.")} />}
-      </section>
+      <div className="provider-table-wrap">
+        <table className="provider-table">
+          <thead><tr><th>Conexão</th><th>Tipo</th><th>Executor</th><th>Estado</th>{isAdmin && <th>Ações</th>}</tr></thead>
+          <tbody>
+            {accounts === null || (isAdmin && apis === null) ? <tr><td colSpan={isAdmin ? 5 : 4} className="muted">Carregando conexões…</td></tr>
+              : rows.length === 0 ? <tr><td colSpan={isAdmin ? 5 : 4} className="provider-empty">Nenhum provider cadastrado. Use “Adicionar Provider” para conectar uma conta.</td></tr>
+              : rows.map((row) => <tr key={row.id}>
+                <td><strong>{row.name}</strong>{row.detail && <div className="provider-detail">{row.detail}</div>}</td>
+                <td>{row.type}</td><td>{row.executor}</td>
+                <td><span className={`status-pill ${row.state.tone}`}>{row.state.text}</span></td>
+                {isAdmin && <td>{row.actions}</td>}
+              </tr>)}
+          </tbody>
+        </table>
+      </div>
+      {adding && <div className="provider-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setAdding(null); }}>
+        <section className="provider-modal" role="dialog" aria-modal="true" aria-labelledby="provider-modal-title">
+          <header><div><h2 id="provider-modal-title">Adicionar Provider</h2><p className="muted small">Escolha o tipo de conexão.</p></div><button className="icon-btn" type="button" aria-label="Fechar" onClick={() => setAdding(null)}><Icon name="close" /></button></header>
+          <label className="provider-kind"><span>Tipo de conexão</span><select value={adding === "choose" ? "" : adding} onChange={(event) => setAdding(event.target.value as "cli" | "api")}><option value="">Selecione…</option><option value="cli">CLI</option><option value="api">API</option></select></label>
+          {adding === "cli"
+            ? <AddAccount executors={executors} onCreate={async (input) => { if (await run(() => transport.createCliConnection(input), "Conta adicionada. Conecte-a para confirmar a autenticação.")) setAdding(null); }} />
+            : adding === "api" ? <AddApi onCreate={async (input) => { if (await run(() => transport.createProviderConnection(input), "Chave salva de forma cifrada.")) setAdding(null); }} /> : null}
+        </section>
+      </div>}
     </div>
   );
 }

@@ -471,3 +471,35 @@ body { margin: 0; }
   .workspace-tab-add { anchor-name: --workspace-picker; }
   .workspace-tab-menu { left: clamp(12px, anchor(--workspace-picker left), calc(100vw - 332px)); right: auto; }
 }
+
+.provider-page { display:grid; gap:16px; }
+.provider-page > .page-head { align-items:center; }
+.provider-add { min-height:40px; display:inline-flex; align-items:center; gap:8px; }
+.provider-add .icon { width:17px; }
+.provider-table-wrap { width:100%; overflow-x:auto; border:1px solid var(--line); border-radius:var(--radius); background:var(--bg-elev); }
+.provider-table { width:100%; min-width:680px; border-collapse:collapse; }
+.provider-table th, .provider-table td { padding:13px 16px; border-bottom:1px solid var(--line); text-align:left; vertical-align:middle; }
+.provider-table th { font-size:11px; color:var(--muted); font-weight:600; letter-spacing:.055em; text-transform:uppercase; }
+.provider-table tr:last-child td { border-bottom:0; }
+.provider-table tbody tr:hover { background:color-mix(in srgb,var(--bg-hover) 55%,transparent); }
+.provider-table td:first-child { min-width:190px; }
+.provider-table td .status-pill { white-space:nowrap; }
+.provider-detail { margin-top:6px; }
+.provider-detail p { margin:0; }
+.provider-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.provider-empty { padding:32px!important; text-align:center!important; color:var(--muted); }
+.provider-modal-backdrop { position:fixed; inset:0; z-index:60; display:grid; place-items:center; padding:20px; background:rgb(3 6 16 / .72); }
+.provider-modal { width:min(560px,100%); max-height:min(88dvh,820px); overflow:auto; padding:22px; border:1px solid var(--border); border-radius:16px; background:var(--oc-surface); box-shadow:0 24px 64px rgb(0 0 0 / .42); }
+.provider-modal > header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:18px; }
+.provider-modal h2 { margin:0; font-size:20px; }
+.provider-modal header p { margin:5px 0 0; }
+.provider-kind { display:grid; gap:6px; margin-bottom:16px; color:var(--muted); font-size:13px; }
+.provider-kind select { min-height:42px; padding:8px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg-rail); color:var(--text); font:inherit; }
+.provider-modal .prov-form { margin:0; }
+.provider-modal .prov-form > h3 { display:none; }
+.provider-modal .prov-actions { margin-top:8px; }
+@media(max-width:700px) {
+  .provider-page > .page-head { align-items:flex-start; }
+  .provider-add { width:100%; justify-content:center; }
+  .provider-modal { padding:18px; }
+}

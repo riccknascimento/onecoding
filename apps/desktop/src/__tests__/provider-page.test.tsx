@@ -51,23 +51,24 @@ describe("One Provider AI: estados reais das contas de CLI", () => {
       .toEqual({ text: "Aguardando o código", tone: "info" });
   });
 
-  it("mostra cada motor com a conta e o estado que vieram do OneHub", async () => {
+  it("mostra as conexões em uma tabela com o estado que veio do OneHub", async () => {
     render(<ProviderPage transport={fakeTransport()} isAdmin />);
-    const claude = await screen.findByRole("list", { name: "Contas Claude Code" });
-    expect(within(claude).getByText("Claude Empresa 01")).toBeInTheDocument();
-    expect(within(claude).getByText("Conectada")).toBeInTheDocument();
-    const codex = screen.getByRole("list", { name: "Contas Codex CLI" });
-    expect(within(codex).getByText("Desconectada")).toBeInTheDocument();
-    expect(within(screen.getByRole("list", { name: "Contas Cursor CLI" })).getByText("Não verificada")).toBeInTheDocument();
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("Claude Empresa 01")).toBeInTheDocument();
+    expect(within(table).getByText("Conectada")).toBeInTheDocument();
+    expect(within(table).getByText("Desconectada")).toBeInTheDocument();
+    expect(within(table).getByText("Não verificada")).toBeInTheDocument();
+    expect(within(table).getByText("Configurada")).toBeInTheDocument();
   });
 
-  it("'Conectar conta' pede o login ao OneHub, sem nenhum segredo na página", async () => {
+  it("'Conectar' pede o login ao OneHub, sem nenhum segredo na página", async () => {
     const t = fakeTransport();
     render(<ProviderPage transport={t} isAdmin />);
-    const codex = await screen.findByRole("list", { name: "Contas Codex CLI" });
-    await userEvent.click(within(codex).getByRole("button", { name: "Conectar conta" }));
+    const table = await screen.findByRole("table");
+    const row = within(table).getByRole("row", { name: /Codex principal/ });
+    await userEvent.click(within(row).getByRole("button", { name: "Conectar" }));
     expect(t.startCliAction).toHaveBeenCalledWith("c2", "login");
-    expect(await screen.findByText("Login iniciado. Acompanhe abaixo.")).toBeInTheDocument();
+    expect(await screen.findByText("Login iniciado.")).toBeInTheDocument();
   });
 
   it("mostra o link oficial e o código de dispositivo durante o login", async () => {
@@ -113,25 +114,27 @@ describe("One Provider AI: estados reais das contas de CLI", () => {
       startCliAction: vi.fn(async () => { throw new OneHubError(409, "session_in_progress"); }),
     });
     render(<ProviderPage transport={t} isAdmin />);
-    const codex = await screen.findByRole("list", { name: "Contas Codex CLI" });
-    await userEvent.click(within(codex).getByRole("button", { name: "Conectar conta" }));
+    const table = await screen.findByRole("table");
+    const codex = within(table).getByRole("row", { name: /Codex principal/ });
+    await userEvent.click(within(codex).getByRole("button", { name: "Conectar" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Já existe uma operação em andamento nesta conta.");
   });
 
   it("desconectar só fica disponível para conta autenticada; remover exige conta desconectada", async () => {
     render(<ProviderPage transport={fakeTransport()} isAdmin />);
-    const claude = await screen.findByRole("list", { name: "Contas Claude Code" });
+    const table = await screen.findByRole("table");
+    const claude = within(table).getByRole("row", { name: /Claude Empresa 01/ });
     expect(within(claude).getByRole("button", { name: "Desconectar" })).toBeEnabled();
     expect(within(claude).getByRole("button", { name: "Remover" })).toBeDisabled();
-    const codex = screen.getByRole("list", { name: "Contas Codex CLI" });
+    const codex = within(table).getByRole("row", { name: /Codex principal/ });
     expect(within(codex).getByRole("button", { name: "Desconectar" })).toBeDisabled();
     expect(within(codex).getByRole("button", { name: "Remover" })).toBeEnabled();
   });
 
   it("membro comum vê as contas, mas não tem ações de administração", async () => {
     render(<ProviderPage transport={fakeTransport({ providerConnections: vi.fn(async () => []), executors: vi.fn(async () => []) })} isAdmin={false} />);
-    await screen.findByRole("list", { name: "Contas Claude Code" });
-    expect(screen.queryByRole("button", { name: "Conectar conta" })).not.toBeInTheDocument();
+    await screen.findByRole("table");
+    expect(screen.queryByRole("button", { name: "Conectar" })).not.toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "Adicionar conta de CLI" })).not.toBeInTheDocument();
   });
 });
@@ -140,6 +143,8 @@ describe("One Provider AI: cadastro de conta e de API Key", () => {
   it("só cria a conta depois da autorização de uso e com o OneExecutor escolhido", async () => {
     const t = fakeTransport();
     render(<ProviderPage transport={t} isAdmin />);
+    await userEvent.click(await screen.findByRole("button", { name: "Adicionar Provider" }));
+    await userEvent.selectOptions(screen.getByLabelText("Tipo de conexão"), "cli");
     const form = await screen.findByRole("form", { name: "Adicionar conta de CLI" });
     const create = within(form).getByRole("button", { name: "Criar conta" });
     await userEvent.type(within(form).getByLabelText("Nome amigável"), "Claude Empresa 02");
@@ -150,10 +155,22 @@ describe("One Provider AI: cadastro de conta e de API Key", () => {
     expect(t.createCliConnection).toHaveBeenCalledWith({ name: "Claude Empresa 02", engine: "claude", executor_id: "e1" });
   });
 
+  it("pede o tipo de conexão antes de mostrar o formulário", async () => {
+    render(<ProviderPage transport={fakeTransport()} isAdmin />);
+    expect(screen.queryByRole("form", { name: "Adicionar conta de CLI" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Adicionar Provider" }));
+    expect(screen.getByRole("dialog", { name: "Adicionar Provider" })).toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "Adicionar conta de CLI" })).not.toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText("Tipo de conexão"), "api");
+    expect(await screen.findByRole("form", { name: "Adicionar conexão por API" })).toBeInTheDocument();
+  });
+
   it("a chave de API sai do campo ao enviar e nunca reaparece na página", async () => {
     const KEY = "sk-or-v1-chave-de-teste-ABCD1234";
     const t = fakeTransport();
     const { container } = render(<ProviderPage transport={t} isAdmin />);
+    await userEvent.click(await screen.findByRole("button", { name: "Adicionar Provider" }));
+    await userEvent.selectOptions(screen.getByLabelText("Tipo de conexão"), "api");
     const form = await screen.findByRole("form", { name: "Adicionar conexão por API" });
     await userEvent.type(within(form).getByLabelText("Nome da conexão"), "OpenRouter equipe");
     const keyInput = within(form).getByLabelText("Chave de API");
@@ -167,9 +184,10 @@ describe("One Provider AI: cadastro de conta e de API Key", () => {
 
   it("não mostra conexão por API como disponível sem o OneHub confirmar a chave", async () => {
     render(<ProviderPage transport={fakeTransport()} isAdmin />);
-    const list = await screen.findByRole("list", { name: "Conexões por API" });
-    expect(within(list).getByText("••••WXYZ")).toBeInTheDocument();
-    expect(screen.getByText(/Teste de conexão e lista de modelos ainda dependem/)).toBeInTheDocument();
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("••••WXYZ")).toBeInTheDocument();
+    expect(within(table).getByText("Configurada")).toBeInTheDocument();
+    expect(within(table).getByText(/O teste de conexão não está disponível/)).toBeInTheDocument();
   });
 });
 
