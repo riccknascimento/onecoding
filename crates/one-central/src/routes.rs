@@ -357,8 +357,12 @@ pub fn router_with_settings(
         )
         .route(
             "/v1/provider-connections/{id}",
-            axum::routing::delete(delete_provider_connection),
+            axum::routing::delete(delete_provider_connection).patch(update_provider_connection),
         )
+        .route("/v1/provider-connections/{id}/test", post(test_provider_connection))
+        .route("/v1/provider-connections/{id}/models", get(provider_connection_models))
+        .route("/v1/orchestrator-settings", get(get_orchestrator_settings).put(save_orchestrator_settings))
+        .route("/v1/executors/{id}/settings", get(get_executor_settings).put(save_executor_settings))
         .route("/v1/tasks", get(list_tasks).post(create_task))
         .route("/v1/grants", get(list_grants))
         .route("/v1/tasks/{id}", get(get_task))
@@ -764,6 +768,123 @@ async fn delete_provider_connection(
     )
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn provider_key_for(s: &AppState, id: Uuid) -> Result<(String, String), ApiError> {
+    let master = provider_master_key(s)?;
+    let client = db(s).await?;
+    let row = client.query_opt("SELECT provider,key_ciphertext,key_nonce FROM provider_connections WHERE id=$1", &[&id]).await?.ok_or(ApiError::NotFound)?;
+    let provider: String = row.get(0);
+    let key = crate::provider_keys::open(&master, &provider, &row.get::<_, Vec<u8>>(1), &row.get::<_, Vec<u8>>(2)).map_err(|_| ApiError::Internal)?;
+    Ok((provider, key))
+}
+
+async fn provider_connection_models(State(s): State<AppState>, admin: AuthUser, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let (provider, key) = provider_key_for(&s, id).await?;
+    let models = crate::provider_http::models(&provider, &key).await.map_err(|_| ApiError::BadRequest("provider_check_failed"))?;
+    Ok(Json(json!({"models": models})))
+}
+
+async fn test_provider_connection(State(s): State<AppState>, admin: AuthUser, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let (provider, key) = provider_key_for(&s, id).await?;
+    let result = crate::provider_http::models(&provider, &key).await;
+    let status = if result.is_ok() { "connected" } else { "error" };
+    let client = db(&s).await?;
+    let updated = client.execute("UPDATE provider_connections SET status=$2,last_checked_at=now(),updated_at=now() WHERE id=$1", &[&id, &status]).await?;
+    if updated == 0 { return Err(ApiError::NotFound); }
+    audit(&client, &admin.email, "provider_connection_test", &id.to_string(), status).await?;
+    match result { Ok(models) => Ok(Json(json!({"status": status, "model_count": models.len()}))), Err(_) => Err(ApiError::BadRequest("provider_check_failed")) }
+}
+
+async fn update_provider_connection(State(s): State<AppState>, admin: AuthUser, Path(id): Path<Uuid>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let client = db(&s).await?;
+    let row = client.query_opt("SELECT provider,default_model FROM provider_connections WHERE id=$1", &[&id]).await?.ok_or(ApiError::NotFound)?;
+    let provider: String = row.get(0);
+    let current_model: Option<String> = row.get(1);
+    let name = b.get("name").and_then(Value::as_str).map(str::trim);
+    let replacing_key = b.get("api_key").and_then(Value::as_str).is_some_and(|v| !v.is_empty());
+    let model = if b.get("default_model").is_some() { b.get("default_model").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned) } else if replacing_key { None } else { current_model };
+    if name.is_some_and(|v| !text_len_ok(v, 1, 120)) { return Err(ApiError::BadRequest("invalid_name")); }
+    if model.as_deref().is_some_and(|v| !text_len_ok(v, 1, 120)) { return Err(ApiError::BadRequest("invalid_model")); }
+    if let Some(key) = b.get("api_key").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+        if !(16..=512).contains(&key.len()) || key.chars().any(char::is_whitespace) { return Err(ApiError::BadRequest("invalid_api_key")); }
+        if let Some(model_id) = model.as_deref() {
+            let available = crate::provider_http::models(&provider, key).await.map_err(|_| ApiError::BadRequest("provider_check_failed"))?;
+            if !available.iter().any(|item| item == model_id) { return Err(ApiError::BadRequest("invalid_model")); }
+        }
+        let master = provider_master_key(&s)?;
+        let (ciphertext, nonce) = crate::provider_keys::seal(&master, &provider, key).map_err(|_| ApiError::Internal)?;
+        let hint = crate::provider_keys::hint(key);
+        client.execute("UPDATE provider_connections SET name=COALESCE($2,name),default_model=$3,key_ciphertext=$4,key_nonce=$5,key_hint=$6,status='unverified',last_checked_at=NULL,updated_at=now() WHERE id=$1", &[&id, &name, &model, &ciphertext, &nonce, &hint]).await?;
+    } else {
+        if let Some(model_id) = model.as_deref() {
+            let (provider, key) = provider_key_for(&s, id).await?;
+            let available = crate::provider_http::models(&provider, &key).await.map_err(|_| ApiError::BadRequest("provider_check_failed"))?;
+            if !available.iter().any(|item| item == model_id) { return Err(ApiError::BadRequest("invalid_model")); }
+        }
+        client.execute("UPDATE provider_connections SET name=COALESCE($2,name),default_model=$3,updated_at=now() WHERE id=$1", &[&id, &name, &model]).await?;
+    }
+    audit(&client, &admin.email, "provider_connection_update", &id.to_string(), "ok").await?;
+    Ok(Json(json!({"id": id, "status": "updated"})))
+}
+
+async fn get_orchestrator_settings(State(s): State<AppState>, admin: AuthUser) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let client = db(&s).await?;
+    let row = client.query_opt("SELECT enabled,provider_connection_id,model,system_prompt,instructions,updated_at FROM orchestrator_settings WHERE singleton=true", &[]).await?;
+    match row {
+        Some(r) => Ok(Json(json!({"enabled": false, "provider_connection_id": r.get::<_, Option<Uuid>>(1), "model": r.get::<_, Option<String>>(2), "system_prompt": r.get::<_, String>(3), "instructions": r.get::<_, String>(4), "updated_at": r.get::<_, DateTime<Utc>>(5), "runtime_available": false}))),
+        None => Ok(Json(json!({"enabled": false, "provider_connection_id": null, "model": null, "system_prompt": "", "instructions": "", "runtime_available": false}))),
+    }
+}
+
+async fn save_orchestrator_settings(State(s): State<AppState>, admin: AuthUser, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    if b.get("enabled").and_then(Value::as_bool).unwrap_or(false) { return Err(ApiError::Unavailable("orchestrator_runtime_unavailable")); }
+    let id = match b.get("provider_connection_id") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(Uuid::parse_str(value).map_err(|_| ApiError::BadRequest("invalid_provider_connection"))?),
+        _ => return Err(ApiError::BadRequest("invalid_provider_connection")),
+    };
+    let model = b.get("model").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+    let prompt = b.get("system_prompt").and_then(Value::as_str).unwrap_or("");
+    let instructions = b.get("instructions").and_then(Value::as_str).unwrap_or("");
+    if prompt.len() > 16_384 || instructions.len() > 16_384 { return Err(ApiError::BadRequest("invalid_prompt")); }
+    if let (Some(provider_id), Some(model_id)) = (id, model) {
+        let (provider, key) = provider_key_for(&s, provider_id).await?;
+        if !crate::provider_http::models(&provider, &key).await.map_err(|_| ApiError::BadRequest("provider_check_failed"))?.iter().any(|available| available == model_id) { return Err(ApiError::BadRequest("invalid_model")); }
+    } else if model.is_some() { return Err(ApiError::BadRequest("provider_model_required")); }
+    let client = db(&s).await?;
+    if let Some(provider_id) = id {
+        let r = client.query_opt("SELECT status FROM provider_connections WHERE id=$1", &[&provider_id]).await?.ok_or(ApiError::NotFound)?;
+        if r.get::<_, String>(0) != "connected" { return Err(ApiError::BadRequest("provider_not_connected")); }
+    }
+    client.execute("INSERT INTO orchestrator_settings(singleton,enabled,provider_connection_id,model,system_prompt,instructions,updated_by,updated_at) VALUES(true,false,$1,$2,$3,$4,$5,now()) ON CONFLICT(singleton) DO UPDATE SET enabled=false,provider_connection_id=EXCLUDED.provider_connection_id,model=EXCLUDED.model,system_prompt=EXCLUDED.system_prompt,instructions=EXCLUDED.instructions,updated_by=EXCLUDED.updated_by,updated_at=now()", &[&id, &model, &prompt, &instructions, &admin.email]).await?;
+    audit(&client, &admin.email, "orchestrator_settings_update", "global", "runtime_unavailable").await?;
+    Ok(Json(json!({"saved": true, "enabled": false, "runtime_available": false})))
+}
+
+async fn get_executor_settings(State(s): State<AppState>, admin: AuthUser, Path(id): Path<Uuid>) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let client = db(&s).await?;
+    let r = client.query_opt("SELECT e.name,es.cli_connection_id,es.instructions FROM executors e LEFT JOIN executor_settings es ON es.executor_id=e.id WHERE e.id=$1 AND e.revoked_at IS NULL", &[&id]).await?.ok_or(ApiError::NotFound)?;
+    Ok(Json(json!({"executor_id": id, "executor_name": r.get::<_, String>(0), "cli_connection_id": r.get::<_, Option<Uuid>>(1), "instructions": r.get::<_, Option<String>>(2).unwrap_or_default(), "runtime_supported": false})))
+}
+
+async fn save_executor_settings(State(s): State<AppState>, admin: AuthUser, Path(id): Path<Uuid>, Json(b): Json<Value>) -> Result<Json<Value>, ApiError> {
+    require_admin(&admin)?;
+    let connection_id = b.get("cli_connection_id").and_then(Value::as_str).and_then(|v| Uuid::parse_str(v).ok()).ok_or(ApiError::BadRequest("cli_connection_required"))?;
+    let instructions = b.get("instructions").and_then(Value::as_str).unwrap_or("");
+    if instructions.len() > 16_384 { return Err(ApiError::BadRequest("invalid_instructions")); }
+    let client = db(&s).await?;
+    let ready = client.query_opt("SELECT 1 FROM cli_connections c JOIN executors e ON e.id=c.executor_id WHERE c.id=$1 AND c.executor_id=$2 AND c.engine='codex' AND c.auth_state='authenticated' AND c.usage_authorized=true AND e.revoked_at IS NULL AND e.last_seen_at > now()-interval '90 seconds' AND e.engines_reported_at > now()-interval '90 seconds' AND EXISTS(SELECT 1 FROM jsonb_array_elements(e.engines) x WHERE x->>'name'='codex' AND x->>'installed'='true' AND x->>'authenticated'='true' AND x->>'approved'='true')", &[&connection_id, &id]).await?.is_some();
+    if !ready { return Err(ApiError::BadRequest("cli_connection_not_ready")); }
+    client.execute("INSERT INTO executor_settings(executor_id,cli_connection_id,instructions,updated_by,updated_at) VALUES($1,$2,$3,$4,now()) ON CONFLICT(executor_id) DO UPDATE SET cli_connection_id=EXCLUDED.cli_connection_id,instructions=EXCLUDED.instructions,updated_by=EXCLUDED.updated_by,updated_at=now()", &[&id, &connection_id, &instructions, &admin.email]).await?;
+    audit(&client, &admin.email, "executor_settings_update", &id.to_string(), "ok").await?;
+    Ok(Json(json!({"saved": true, "runtime_supported": false})))
 }
 
 async fn pair_node(

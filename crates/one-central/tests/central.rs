@@ -2628,6 +2628,19 @@ async fn provider_connections_store_only_ciphertext_and_never_return_the_key() {
     );
     drop(client);
 
+    const REPLACEMENT_KEY: &str = "sk-or-v1-chave-substituta-XYZ98765";
+    let (s, updated) = call(&app, "PATCH", &format!("/v1/provider-connections/{id}"), Some(&admin), Some(json!({"name":"OpenRouter equipe","api_key":REPLACEMENT_KEY}))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!updated.to_string().contains(REPLACEMENT_KEY));
+    let client = pool.get().await.unwrap();
+    let row = client.query_one("SELECT key_ciphertext,key_nonce,status,default_model FROM provider_connections WHERE id::text=$1", &[&id]).await.unwrap();
+    let ct: Vec<u8> = row.get(0);
+    let nonce: Vec<u8> = row.get(1);
+    assert_eq!(one_central::provider_keys::open(&[42u8; 32], "openrouter", &ct, &nonce).unwrap(), REPLACEMENT_KEY);
+    assert_eq!(row.get::<_, String>(2), "unverified");
+    assert_eq!(row.get::<_, Option<String>>(3), None);
+    drop(client);
+
     // validação de entrada
     let (s, b) = call(&app, "POST", "/v1/provider-connections", Some(&admin),
         Some(json!({"name": "X", "provider": "groq", "api_key": PLAIN_KEY}))).await;
@@ -2640,7 +2653,7 @@ async fn provider_connections_store_only_ciphertext_and_never_return_the_key() {
     let (s, list) = call(&app, "GET", "/v1/provider-connections", Some(&admin), None).await;
     assert_eq!(s, StatusCode::OK);
     let text = list.to_string();
-    assert!(text.contains("••••1234") && !text.contains(PLAIN_KEY));
+    assert!(text.contains("••••8765") && !text.contains(PLAIN_KEY) && !text.contains(REPLACEMENT_KEY));
     let (s, _) = call(&app, "GET", "/v1/provider-connections", Some(&member), None).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
 
@@ -2649,6 +2662,57 @@ async fn provider_connections_store_only_ciphertext_and_never_return_the_key() {
     assert_eq!(s, StatusCode::NO_CONTENT);
     let (s, _) = call(&app, "DELETE", &format!("/v1/provider-connections/{id}"), Some(&admin), None).await;
     assert_eq!(s, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+#[ignore = "exige banco PostgreSQL isolado terminado em _test"]
+async fn orchestrator_settings_persist_without_enabling_unavailable_runtime() {
+    let (_, pool) = fresh_app().await;
+    let app = router(pool.clone());
+    let (admin, member) = admin_and_member(&app, &pool).await;
+    let (status, body) = call(&app, "PUT", "/v1/orchestrator-settings", Some(&admin), Some(json!({
+        "enabled": false, "provider_connection_id": null, "model": null,
+        "system_prompt": "prompt controlado", "instructions": "regras de teste"
+    }))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["runtime_available"], false);
+    let (status, saved) = call(&app, "GET", "/v1/orchestrator-settings", Some(&admin), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["system_prompt"], "prompt controlado");
+    assert_eq!(saved["instructions"], "regras de teste");
+    let (status, denied) = call(&app, "PUT", "/v1/orchestrator-settings", Some(&member), Some(json!({"enabled": false}))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(denied["error"], "admin_required");
+    let (status, denied_enable) = call(&app, "PUT", "/v1/orchestrator-settings", Some(&admin), Some(json!({"enabled": true}))).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(denied_enable["error"], "orchestrator_runtime_unavailable");
+}
+
+#[tokio::test]
+#[ignore = "exige banco PostgreSQL isolado terminado em _test"]
+async fn executor_profile_requires_its_own_ready_codex_connection_and_persists_instructions() {
+    let (_, pool) = fresh_app().await;
+    let app = router(pool.clone());
+    let (admin, member) = admin_and_member(&app, &pool).await;
+    let (executor_id, executor_token) = cli_executor(&app, &admin).await;
+    let (status, _) = call(&app, "POST", "/executor/v1/heartbeat", Some(&executor_token), Some(json!([{"name":"codex","installed":true,"authenticated":true,"approved":true,"version":"1.2-test"}]))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, connection) = call(&app, "POST", "/v1/cli-connections", Some(&admin), Some(json!({"name":"Codex configurado","engine":"codex","executor_id":executor_id,"usage_authorized":true}))).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let connection_id = connection["id"].as_str().unwrap();
+    let client = pool.get().await.unwrap();
+    client.execute("UPDATE cli_connections SET auth_state='authenticated',auth_checked_at=now() WHERE id::text=$1", &[&connection_id]).await.unwrap();
+    drop(client);
+    let path = format!("/v1/executors/{executor_id}/settings");
+    let (status, body) = call(&app, "PUT", &path, Some(&admin), Some(json!({"cli_connection_id":connection_id,"instructions":"Responda com evidências."}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["runtime_supported"], false);
+    let (status, saved) = call(&app, "GET", &path, Some(&admin), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(saved["cli_connection_id"], connection_id);
+    assert_eq!(saved["instructions"], "Responda com evidências.");
+    let (status, _) = call(&app, "GET", &path, Some(&member), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 async fn cli_executor(app: &axum::Router, admin: &str) -> (String, String) {
@@ -2667,6 +2731,8 @@ async fn cli_accounts_login_through_the_executor_with_isolated_scope_and_no_secr
     let (app, pool) = fresh_app().await;
     let (admin, member) = admin_and_member(&app, &pool).await;
     let (eid, ex_token) = cli_executor(&app, &admin).await;
+    let (s, _) = call(&app, "POST", "/executor/v1/heartbeat", Some(&ex_token), Some(json!([{"name":"claude","installed":true,"authenticated":false,"approved":true,"version":"1.0-test"}]))).await;
+    assert_eq!(s, StatusCode::OK);
 
     // três contas Claude separadas, cada uma com o próprio estado
     for name in ["Claude Empresa 01", "Claude Empresa 02"] {

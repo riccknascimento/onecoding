@@ -204,5 +204,12 @@ export function createHttpTransport(base = DEFAULT_API_BASE): OneHubTransport {
     providerConnections: () => request<{ connections: ProviderConnection[] }>("GET", "/v1/provider-connections").then((d) => d.connections),
     createProviderConnection: (input) => request("POST", "/v1/provider-connections", input),
     deleteProviderConnection: (id) => request<unknown>("DELETE", `/v1/provider-connections/${id}`).then(() => undefined),
+    testProviderConnection: (id) => request("POST", `/v1/provider-connections/${id}/test`),
+    providerConnectionModels: (id) => request<{ models: string[] }>("GET", `/v1/provider-connections/${id}/models`).then((d) => d.models),
+    updateProviderConnection: (id, input) => request("PATCH", `/v1/provider-connections/${id}`, input).then(() => undefined),
+    orchestratorSettings: () => request("GET", "/v1/orchestrator-settings"),
+    saveOrchestratorSettings: (input) => request("PUT", "/v1/orchestrator-settings", input).then(() => undefined),
+    executorSettings: (id) => request("GET", `/v1/executors/${id}/settings`),
+    saveExecutorSettings: (id, input) => request("PUT", `/v1/executors/${id}/settings`, input).then(() => undefined),
   };
 }

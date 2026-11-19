@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { OneHubError } from "../transport";
-import type { CentralExecutor, CentralGrant, CentralNode, CentralUser, OneHubTransport } from "../transport";
+import type { CentralExecutor, CentralGrant, CentralNode, CentralUser, OneHubTransport, ProviderConnection, CliConnection, OrchestratorSettings } from "../transport";
 
 export const SETTINGS_SECTIONS = ["OneNodes", "OneExecutors", "Projetos", "Orquestrador"] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
@@ -255,6 +255,7 @@ function AdminContent({ transport, section, onSection, onProvider }: { transport
                 {executors.map((x) => (
                   <li key={x.id}>
                     <span>{x.name}</span> <span className="muted">· {x.engine} · {EXEC_LABEL[x.status] ?? x.status}</span>
+                    <ExecutorProfile transport={transport} executor={x} />
                     {x.status !== "revoked" && (
                       <button type="button" className="btn small" disabled={busy} onClick={() => revoke(`o OneExecutor ${x.name}`, () => transport.revokeExecutor(x.id))}>Revogar</button>
                     )}
@@ -330,9 +331,7 @@ function AdminContent({ transport, section, onSection, onProvider }: { transport
           <>
             <div className="card">
               <h2>OneOrchestrator</h2>
-              <p className="muted small">
-                A configuração de motor, modelo, prompts e políticas do Orquestrador ainda não está disponível neste Central. As conexões de IA são gerenciadas em Provider AI; nenhuma orquestração é simulada.
-              </p>
+              <OrchestratorConfig transport={transport} />
             </div>
             <div className="card">
               <h2>OneHub Central</h2>
@@ -356,4 +355,72 @@ function AdminContent({ transport, section, onSection, onProvider }: { transport
       </div>
     </section>
   );
+}
+
+function OrchestratorConfig({ transport }: { transport: OneHubTransport }) {
+  const [value, setValue] = useState<OrchestratorSettings | null>(null);
+  const [providers, setProviders] = useState<ProviderConnection[]>([]);
+  const [models, setModels] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    Promise.all([transport.orchestratorSettings(), transport.providerConnections()]).then(([settings, connections]) => {
+      setValue(settings); setProviders(connections.filter((c) => c.status === "connected"));
+      if (settings.provider_connection_id) void transport.providerConnectionModels(settings.provider_connection_id).then(setModels).catch(() => undefined);
+    }).catch(() => setError("Não foi possível carregar as configurações do Orquestrador."));
+  }, [transport]);
+  if (!value) return <p className="muted">Carregando configurações…</p>;
+  async function save() {
+    const current = value;
+    if (!current) return;
+    setBusy(true); setError(null); setNotice(null);
+    try { await transport.saveOrchestratorSettings(current); setNotice("Configuração salva. O runtime permanece indisponível e o Orquestrador desativado."); }
+    catch { setError("Não foi possível salvar. Confirme se a conexão e o modelo estão válidos."); }
+    finally { setBusy(false); }
+  }
+  const selected = providers.find((p) => p.id === value.provider_connection_id);
+  return <div className="admin-form">
+    <p className="muted small">Selecione uma conexão API verificada e configure os prompts. O runtime ainda não executa tarefas, portanto não pode ser ativado.</p>
+    <label>Conexão API<select value={value.provider_connection_id ?? ""} onChange={(e) => { setValue({ ...value, provider_connection_id: e.target.value || null, model: null }); setModels([]); }}><option value="">Sem conexão</option>{providers.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.provider}</option>)}</select></label>
+    <label>Modelo<select value={value.model ?? ""} disabled={!selected || !models.length} onChange={(e) => setValue({ ...value, model: e.target.value || null })}><option value="">Selecione…</option>{models.map((m) => <option key={m}>{m}</option>)}</select></label>
+    {selected && !models.length && <button type="button" className="btn" disabled={busy} onClick={() => { setBusy(true); void transport.providerConnectionModels(selected.id).then(setModels).catch(() => setError("Falha ao consultar modelos disponíveis.")).finally(() => setBusy(false)); }}>Atualizar modelos</button>}
+    <label>Prompt de sistema<textarea rows={5} maxLength={16384} value={value.system_prompt} onChange={(e) => setValue({ ...value, system_prompt: e.target.value })} /></label>
+    <label>Instruções<textarea rows={4} maxLength={16384} value={value.instructions} onChange={(e) => setValue({ ...value, instructions: e.target.value })} /></label>
+    {error && <p role="alert" className="error">{error}</p>}{notice && <p role="status" className="muted small">{notice}</p>}
+    <button type="button" className="btn primary" disabled={busy} onClick={() => void save()}>Salvar configuração</button>
+  </div>;
+}
+
+function ExecutorProfile({ transport, executor }: { transport: OneHubTransport; executor: CentralExecutor }) {
+  const [open, setOpen] = useState(false);
+  const [accounts, setAccounts] = useState<CliConnection[]>([]);
+  const [selected, setSelected] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function toggle() {
+    setOpen((v) => !v);
+    if (open || accounts.length) return;
+    setBusy(true);
+    try {
+      const [all, current] = await Promise.all([transport.cliConnections(), transport.executorSettings(executor.id)]);
+      setAccounts(all.filter((c) => c.executor_id === executor.id && c.engine === "codex" && c.auth_state === "authenticated" && c.usage_authorized));
+      setSelected(current.cli_connection_id ?? ""); setInstructions(current.instructions);
+    } catch { setError("Não foi possível carregar o perfil deste OneExecutor."); }
+    finally { setBusy(false); }
+  }
+  async function save() {
+    setBusy(true); setError(null);
+    try { await transport.saveExecutorSettings(executor.id, { cli_connection_id: selected, instructions }); }
+    catch { setError("A conta deve estar autenticada, autorizada e associada a este OneExecutor online."); }
+    finally { setBusy(false); }
+  }
+  return <div className="executor-profile"><button type="button" className="btn small" onClick={() => void toggle()} aria-expanded={open}>Configurar perfil</button>
+    {open && <div className="admin-form"><p className="muted small">Somente Codex autenticado neste executor. A configuração ainda não está ligada ao runtime de tarefas.</p>
+      <label>Conta Codex<select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={busy}><option value="">Selecione…</option>{accounts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+      <label>Instruções específicas<textarea rows={3} maxLength={16384} value={instructions} onChange={(e) => setInstructions(e.target.value)} /></label>
+      {error && <p role="alert" className="error">{error}</p>}<button type="button" className="btn primary" disabled={busy || !selected} onClick={() => void save()}>Salvar perfil</button>
+    </div>}
+  </div>;
 }

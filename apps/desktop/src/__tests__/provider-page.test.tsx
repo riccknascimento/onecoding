@@ -19,7 +19,7 @@ const CURSOR_01: CliConnection = {
 };
 const EXECUTOR: CentralExecutor = { id: "e1", name: "OneExecutor VPS", engine: "codex", status: "online" };
 const API: ProviderConnection = {
-  id: "p1", name: "OpenRouter time", provider: "openrouter", key_hint: "••••WXYZ", default_model: null, status: "unverified", created_at: "2026-11-19T12:00:00Z",
+    id: "p1", name: "OpenRouter time", provider: "openrouter", key_hint: "••••WXYZ", default_model: null, status: "unverified", last_checked_at: null, created_at: "2026-11-19T12:00:00Z",
 };
 
 function fakeTransport(over: Partial<Record<keyof OneHubTransport, unknown>> = {}) {
@@ -35,6 +35,13 @@ function fakeTransport(over: Partial<Record<keyof OneHubTransport, unknown>> = {
     createCliConnection: vi.fn(async () => ({})),
     createProviderConnection: vi.fn(async () => ({})),
     deleteProviderConnection: vi.fn(async () => undefined),
+    testProviderConnection: vi.fn(async () => ({ status: "connected", model_count: 1 })),
+    providerConnectionModels: vi.fn(async () => ["model-a"]),
+    updateProviderConnection: vi.fn(async () => undefined),
+    orchestratorSettings: vi.fn(async () => ({ enabled: false as const, provider_connection_id: null, model: null, system_prompt: "", instructions: "", runtime_available: false as const })),
+    saveOrchestratorSettings: vi.fn(async () => undefined),
+    executorSettings: vi.fn(async (id: string) => ({ executor_id: id, executor_name: "Executor Mac", cli_connection_id: null, instructions: "", runtime_supported: false as const })),
+    saveExecutorSettings: vi.fn(async () => undefined),
     ...over,
   };
   return base as unknown as OneHubTransport & typeof base;
@@ -54,7 +61,7 @@ describe("One Provider AI: estados reais das contas de CLI", () => {
   it("mostra as conexões em uma tabela com o estado que veio do OneHub", async () => {
     render(<ProviderPage transport={fakeTransport()} isAdmin />);
     const table = await screen.findByRole("table");
-    expect(screen.getByText(/Contas CLI autenticadas no OneExecutor escolhido/)).toBeInTheDocument();
+    expect(screen.getByText(/Gerencie contas CLI e conexões API/)).toBeInTheDocument();
     expect(within(table).getByText("Claude Empresa 01")).toBeInTheDocument();
     expect(within(table).getByText("Conectada")).toBeInTheDocument();
     expect(within(table).getByText("Desconectada")).toBeInTheDocument();
@@ -184,11 +191,25 @@ describe("One Provider AI: cadastro de conta e de API Key", () => {
   });
 
   it("não mostra conexão por API como disponível sem o OneHub confirmar a chave", async () => {
-    render(<ProviderPage transport={fakeTransport()} isAdmin />);
+    const t = fakeTransport();
+    render(<ProviderPage transport={t} isAdmin />);
     const table = await screen.findByRole("table");
     expect(within(table).getByText("••••WXYZ")).toBeInTheDocument();
     expect(within(table).getByText("Configurada")).toBeInTheDocument();
-    expect(within(table).getByText(/O teste de conexão não está disponível/)).toBeInTheDocument();
+    expect(within(table).getByRole("button", { name: "Testar" })).toBeInTheDocument();
+    expect(within(table).getByRole("button", { name: "Modelos" })).toBeInTheDocument();
+    await userEvent.click(within(table).getByRole("button", { name: "Testar" }));
+    expect(t.testProviderConnection).toHaveBeenCalledWith("p1");
+    await userEvent.click(within(table).getByRole("button", { name: "Modelos" }));
+    expect(t.providerConnectionModels).toHaveBeenCalledWith("p1");
+    expect(await within(table).findByRole("option", { name: "model-a" })).toBeInTheDocument();
+    await userEvent.click(within(table).getByRole("button", { name: "Editar" }));
+    await userEvent.clear(within(table).getByLabelText("Nome"));
+    await userEvent.type(within(table).getByLabelText("Nome"), "OpenRouter atualizado");
+    const replacement = "sk-or-v1-nova-chave-segura-1234";
+    await userEvent.type(within(table).getByLabelText("Substituir chave (opcional)"), replacement);
+    await userEvent.click(within(table).getByRole("button", { name: "Salvar conexão" }));
+    expect(t.updateProviderConnection).toHaveBeenCalledWith("p1", { name: "OpenRouter atualizado", api_key: replacement });
   });
 });
 

@@ -487,6 +487,10 @@ body { margin: 0; }
 .provider-detail { margin-top:6px; }
 .provider-detail p { margin:0; }
 .provider-actions { display:flex; gap:6px; flex-wrap:wrap; }
+.provider-api-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:230px; }
+.provider-api-actions .btn { white-space:nowrap; }
+.provider-model-select { flex:1 1 100%; display:grid; gap:5px; color:var(--muted); font-size:12px; }
+.provider-model-select select { min-height:36px; max-width:280px; padding:6px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-rail); color:var(--text); font:inherit; }
 .provider-empty { padding:32px!important; text-align:center!important; color:var(--muted); }
 .provider-modal-backdrop { position:fixed; inset:0; z-index:60; display:grid; place-items:center; padding:20px; background:rgb(3 6 16 / .72); }
 .provider-modal { width:min(560px,100%); max-height:min(88dvh,820px); overflow:auto; padding:22px; border:1px solid var(--border); border-radius:16px; background:var(--oc-surface); box-shadow:0 24px 64px rgb(0 0 0 / .42); }

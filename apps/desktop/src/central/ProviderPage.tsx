@@ -45,6 +45,10 @@ const ERROR_TEXT: Record<string, string> = {
   provider_key_missing: "A proteção das chaves não está configurada neste OneHub. Peça ao administrador.",
   forbidden: "Somente administradores podem gerenciar provedores.",
   not_found: "Item não encontrado. Atualize a página.",
+  provider_check_failed: "O provedor recusou a chave ou não respondeu. Verifique a credencial e tente novamente.",
+  engine_unavailable: "Este OneExecutor ainda não reportou a CLI instalada e aprovada para este provedor.",
+  invalid_model: "Selecione um modelo informado pelo próprio provedor.",
+  provider_not_connected: "Teste a conexão API antes de selecioná-la no Orquestrador.",
 };
 
 export function errorMessage(e: unknown): string {
@@ -212,9 +216,10 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
       type: ENGINES.find((engine) => engine.id === connection.engine)?.label ?? connection.engine,
       executor: connection.executor_name,
       state: accountState(connection),
-      detail: connection.session && ACTIVE.includes(connection.session.state)
-        ? <Session session={connection.session} onCancel={() => void run(() => transport.cancelCliSession(connection.session!.id))} onCode={(code) => transport.submitCliCode(connection.session!.id, code).then(loadAccounts)} />
-        : null,
+      detail: <>
+        <p className="muted small">Instalação: {connection.installed === true ? "instalada" : connection.installed === false ? "não instalada" : "não reportada"} · autorização: {connection.approved === true ? "aprovada" : connection.approved === false ? "não aprovada" : "não reportada"}{connection.version ? ` · versão ${connection.version}` : ""}</p>
+        {connection.session && ACTIVE.includes(connection.session.state) && <Session session={connection.session} onCancel={() => void run(() => transport.cancelCliSession(connection.session!.id))} onCode={(code) => transport.submitCliCode(connection.session!.id, code).then(loadAccounts)} />}
+      </>,
       actions: <AccountCard
         c={connection}
         isAdmin={isAdmin}
@@ -228,15 +233,15 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
       name: connection.name,
       type: PROVIDERS.find((provider) => provider.id === connection.provider)?.label ?? connection.provider,
       executor: "OneHub",
-      state: { text: "Configurada", tone: "info" as const },
-      detail: <p className="muted small">Chave: <code>{connection.key_hint}</code>{connection.default_model ? ` · modelo: ${connection.default_model}` : ""}. O teste de conexão não está disponível.</p>,
-      actions: isAdmin ? <button type="button" className="btn ghost" onClick={() => void run(() => transport.deleteProviderConnection(connection.id), "Conexão removida.")}>Remover</button> : null,
+      state: connection.status === "connected" ? { text: "Conectada", tone: "ok" as const } : connection.status === "error" ? { text: "Erro", tone: "bad" as const } : { text: "Configurada", tone: "info" as const },
+      detail: <p className="muted small">Chave: <code>{connection.key_hint}</code>{connection.default_model ? ` · modelo: ${connection.default_model}` : ""}{connection.last_checked_at ? ` · verificada ${new Date(connection.last_checked_at).toLocaleString()}` : ""}.</p>,
+      actions: isAdmin ? <ApiActions c={connection} transport={transport} onRefresh={loadConnections} onRemove={() => run(() => transport.deleteProviderConnection(connection.id), "Conexão removida.")} onError={setError} onNotice={setNotice} /> : null,
     })),
   ];
 
   return (
     <div className="page provider-page">
-      <PageHeader title="One Provider AI" subtitle="Contas CLI autenticadas no OneExecutor escolhido e chaves API cifradas no OneHub. O cadastro não instala CLIs remotamente, e o teste de chaves API ainda não está disponível." actions={isAdmin ? <button className="btn primary provider-add" type="button" onClick={() => setAdding("choose")}><Icon name="plus" /> Adicionar Provider</button> : undefined} />
+      <PageHeader title="One Provider AI" subtitle="Gerencie contas CLI e conexões API. Credenciais API são cifradas no OneHub; o cadastro não instala CLIs remotamente." actions={isAdmin ? <button className="btn primary provider-add" type="button" onClick={() => setAdding("choose")}><Icon name="plus" /> Adicionar Provider</button> : undefined} />
       {error && <p role="alert" className="error">{error}</p>}
       {notice && <p role="status" className="muted small">{notice}</p>}
       <div className="provider-table-wrap">
@@ -265,6 +270,37 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
       </div>}
     </div>
   );
+}
+
+function ApiActions({ c, transport, onRefresh, onRemove, onError, onNotice }: { c: ProviderConnection; transport: OneHubTransport; onRefresh(): Promise<void>; onRemove(): Promise<boolean>; onError(value: string | null): void; onNotice(value: string | null): void }) {
+  const [models, setModels] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [model, setModel] = useState(c.default_model ?? "");
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(c.name);
+  const [key, setKey] = useState("");
+  async function act(action: () => Promise<unknown>, message?: string) {
+    setBusy(true); onError(null); onNotice(null);
+    try { await action(); if (message) onNotice(message); await onRefresh(); return true; }
+    catch (e) { onError(errorMessage(e)); return false; }
+    finally { setBusy(false); }
+  }
+  async function update(e: FormEvent) {
+    e.preventDefault();
+    const replacement = key;
+    setKey("");
+    const ok = await act(() => transport.updateProviderConnection(c.id, { name: name.trim(), ...(replacement ? { api_key: replacement } : {}) }), "Conexão atualizada. Uma chave substituída precisa ser testada novamente.");
+    if (ok) setEditing(false);
+  }
+  return <div className="provider-api-actions">
+    <button className="btn ghost" type="button" disabled={busy} onClick={() => void act(() => transport.testProviderConnection(c.id), "Conexão validada pelo provedor.")}>Testar</button>
+    <button className="btn ghost" type="button" disabled={busy} onClick={() => void act(async () => setModels(await transport.providerConnectionModels(c.id)))}>Modelos</button>
+    <button className="btn ghost" type="button" disabled={busy || !model.trim()} onClick={() => void act(() => transport.updateProviderConnection(c.id, { default_model: model.trim() }), "Modelo padrão salvo.")}>Salvar modelo</button>
+    <button className="btn ghost" type="button" disabled={busy} onClick={() => setEditing((v) => !v)}>{editing ? "Cancelar edição" : "Editar"}</button>
+    <button className="btn ghost" type="button" disabled={busy} onClick={() => void onRemove()}>Remover</button>
+    {models && <label className="provider-model-select"><span>Modelo disponível</span><select value={model} onChange={(e) => setModel(e.target.value)}><option value="">Escolher modelo</option>{models.map((x) => <option key={x} value={x}>{x}</option>)}</select></label>}
+    {editing && <form className="provider-model-select" onSubmit={(e) => void update(e)}><label>Nome<input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} required /></label><label>Substituir chave (opcional)<input type="password" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="new-password" /></label><button type="submit" className="btn" disabled={busy || !name.trim()}>Salvar conexão</button></form>}
+  </div>;
 }
 
 function AddAccount({ executors, onCreate }: { executors: CentralExecutor[]; onCreate(input: { name: string; engine: CliEngine; executor_id: string }): Promise<void> }) {

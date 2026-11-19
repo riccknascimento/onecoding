@@ -59,7 +59,7 @@ async fn list_connections(State(s): State<AppState>, admin: AuthUser) -> Result<
     let rows = client
         .query(
             "SELECT c.id, c.name, c.engine, c.executor_id, e.name, c.usage_authorized, c.auth_state, c.auth_checked_at, \
-                    a.id, a.action, a.state, a.url, a.device_code, a.result \
+                    a.id, a.action, a.state, a.url, a.device_code, a.result, e.engines, e.engines_reported_at \
              FROM cli_connections c \
              JOIN executors e ON e.id = c.executor_id \
              LEFT JOIN LATERAL (SELECT * FROM cli_sessions s WHERE s.connection_id = c.id ORDER BY s.created_at DESC LIMIT 1) a ON true \
@@ -86,6 +86,9 @@ fn connection_json(r: &tokio_postgres::Row) -> Value {
             "result": r.get::<_, Option<String>>(13),
         })
     });
+    let engines: Value = r.get(14);
+    let engine: String = r.get(2);
+    let report = engines.as_array().and_then(|items| items.iter().find(|item| item.get("name").and_then(Value::as_str) == Some(engine.as_str())));
     json!({
         "id": r.get::<_, Uuid>(0),
         "name": r.get::<_, String>(1),
@@ -95,6 +98,10 @@ fn connection_json(r: &tokio_postgres::Row) -> Value {
         "usage_authorized": r.get::<_, bool>(5),
         "auth_state": r.get::<_, String>(6),
         "auth_checked_at": r.get::<_, Option<DateTime<Utc>>>(7),
+        "installation_reported_at": r.get::<_, Option<DateTime<Utc>>>(15),
+        "installed": report.and_then(|v| v.get("installed")).and_then(Value::as_bool),
+        "approved": report.and_then(|v| v.get("approved")).and_then(Value::as_bool),
+        "version": report.and_then(|v| v.get("version")).cloned().unwrap_or(Value::Null),
         "session": session,
     })
 }
@@ -148,13 +155,14 @@ async fn enqueue(s: &AppState, admin: &AuthUser, id: Uuid, action: &str) -> Resu
     let client = db(s).await?;
     let conn = client
         .query_opt(
-            "SELECT c.executor_id, c.usage_authorized FROM cli_connections c WHERE c.id = $1",
+            "SELECT c.executor_id, c.usage_authorized, c.engine FROM cli_connections c WHERE c.id = $1",
             &[&id],
         )
         .await?
         .ok_or(ApiError::NotFound)?;
     let executor_id: Uuid = conn.get(0);
     let authorized: bool = conn.get(1);
+    let engine: String = conn.get(2);
     if !authorized {
         return Err(ApiError::Forbidden("usage_not_authorized"));
     }
@@ -168,6 +176,13 @@ async fn enqueue(s: &AppState, admin: &AuthUser, id: Uuid, action: &str) -> Resu
     if online.is_none() {
         return Err(ApiError::Conflict("executor_offline"));
     }
+    let ready = client.query_opt(
+        "SELECT 1 FROM executors e CROSS JOIN LATERAL jsonb_array_elements(e.engines) x \
+         WHERE e.id=$1 AND e.engines_reported_at > now()-($3::int * interval '1 second') \
+         AND x->>'name'=$2 AND x->>'installed'='true' AND x->>'approved'='true'",
+        &[&executor_id, &engine, &(EXECUTOR_ONLINE_WINDOW as i32)],
+    ).await?;
+    if ready.is_none() { return Err(ApiError::Conflict("engine_unavailable")); }
     let row = client
         .query_opt(
             "INSERT INTO cli_sessions(connection_id, action, created_by, expires_at) \

@@ -69,6 +69,13 @@ function fakeTransport(over: Partial<OneHubTransport> = {}): OneHubTransport {
     providerConnections: vi.fn(async () => []),
     createProviderConnection: vi.fn(async () => ({})),
     deleteProviderConnection: vi.fn(async () => undefined),
+    testProviderConnection: vi.fn(async () => ({ status: "connected", model_count: 1 })),
+    providerConnectionModels: vi.fn(async () => ["model-a"]),
+    updateProviderConnection: vi.fn(async () => undefined),
+    orchestratorSettings: vi.fn(async () => ({ enabled: false as const, provider_connection_id: null, model: null, system_prompt: "", instructions: "", runtime_available: false as const })),
+    saveOrchestratorSettings: vi.fn(async () => undefined),
+    executorSettings: vi.fn(async (id: string) => ({ executor_id: id, executor_name: "Executor Mac", cli_connection_id: null, instructions: "", runtime_supported: false as const })),
+    saveExecutorSettings: vi.fn(async () => undefined),
     grants: vi.fn(async () => [{ node_id: "n1", node_name: "Servidor A", project_id: "p1", project_name: "SystemFlow", root_path: "/opt/onenode/workspace/systemflow" }]),
     workspaces: vi.fn(async () => [{ id: "w1", name: "Meu Workspace", node_id: null, project_id: null, updated_at: "x" }]),
     createWorkspace: vi.fn(async (name: string) => ({ id: "w2", name, node_id: null, project_id: null, updated_at: "x" })),
@@ -241,12 +248,32 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     expect(await screen.findByRole("heading", { name: "One Provider AI" })).toBeInTheDocument();
   });
 
-  it("informa que motor, modelo e prompts do Orquestrador ainda não são configuráveis", async () => {
+  it("carrega as configurações do Orquestrador, mantendo a execução desativada", async () => {
     const user = await login(fakeTransport());
     await user.click(await screen.findByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("button", { name: /^Orquestrador$/ }));
-    expect(await screen.findByText(/configuração de motor, modelo, prompts e políticas do Orquestrador ainda não está disponível/)).toBeInTheDocument();
-    expect(screen.queryByRole("combobox", { name: /modelo/i })).not.toBeInTheDocument();
+    expect(await screen.findByLabelText("Conexão API")).toBeInTheDocument();
+    expect(screen.getByLabelText("Modelo")).toBeDisabled();
+    expect(screen.getByLabelText("Prompt de sistema")).toBeInTheDocument();
+    expect(screen.getByText(/runtime ainda não executa tarefas/)).toBeInTheDocument();
+  });
+
+  it("salva a conexão API, modelo disponível e prompts do Orquestrador", async () => {
+    const transport = fakeTransport({
+      providerConnections: vi.fn(async () => [{ id: "p1", name: "OpenAI equipe", provider: "openai" as const, key_hint: "••••1234", default_model: null, status: "connected", last_checked_at: null, created_at: "now" }]),
+      providerConnectionModels: vi.fn(async () => ["gpt-test"]),
+    });
+    const user = await login(transport);
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: /^Orquestrador$/ }));
+    await screen.findByLabelText("Conexão API");
+    await user.selectOptions(screen.getByLabelText("Conexão API"), "p1");
+    await user.click(screen.getByRole("button", { name: "Atualizar modelos" }));
+    await user.selectOptions(await screen.findByLabelText("Modelo"), "gpt-test");
+    await user.type(screen.getByLabelText("Prompt de sistema"), "Coordene com segurança");
+    await user.click(screen.getByRole("button", { name: "Salvar configuração" }));
+    expect(await screen.findByRole("status")).toHaveTextContent(/runtime permanece indisponível/);
+    expect(transport.saveOrchestratorSettings).toHaveBeenCalledWith(expect.objectContaining({ provider_connection_id: "p1", model: "gpt-test", system_prompt: "Coordene com segurança" }));
   });
 
   it("sem concessão, o OneNode continua selecionável e a tela mostra o caminho para conceder acesso", async () => {

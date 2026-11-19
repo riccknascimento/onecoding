@@ -151,6 +151,10 @@ export interface CliConnection {
   usage_authorized: boolean;
   auth_state: CliAuthState;
   auth_checked_at: string | null;
+  installed?: boolean | null;
+  approved?: boolean | null;
+  version?: string | null;
+  installation_reported_at?: string | null;
   session: CliSessionView | null;
 }
 
@@ -164,8 +168,12 @@ export interface ProviderConnection {
   key_hint: string;
   default_model: string | null;
   status: string;
+  last_checked_at?: string | null;
   created_at: string;
 }
+
+export interface OrchestratorSettings { enabled: false; provider_connection_id: string | null; model: string | null; system_prompt: string; instructions: string; runtime_available: false; updated_at?: string; }
+export interface ExecutorSettings { executor_id: string; executor_name: string; cli_connection_id: string | null; instructions: string; runtime_supported: false; }
 
 export interface TurnInput {
   text: string;
@@ -257,6 +265,13 @@ export interface OneHubTransport {
   providerConnections(): Promise<ProviderConnection[]>;
   createProviderConnection(input: { name: string; provider: ApiProvider; api_key: string; default_model?: string }): Promise<unknown>;
   deleteProviderConnection(id: string): Promise<void>;
+  testProviderConnection(id: string): Promise<{ status: string; model_count: number }>;
+  providerConnectionModels(id: string): Promise<string[]>;
+  updateProviderConnection(id: string, input: { name?: string; default_model?: string; api_key?: string }): Promise<void>;
+  orchestratorSettings(): Promise<OrchestratorSettings>;
+  saveOrchestratorSettings(input: { enabled: boolean; provider_connection_id: string | null; model: string | null; system_prompt: string; instructions: string }): Promise<void>;
+  executorSettings(id: string): Promise<ExecutorSettings>;
+  saveExecutorSettings(id: string, input: { cli_connection_id: string; instructions: string }): Promise<void>;
   subscribe(conversationId: string, options: SubscribeOptions): Subscription;
   cancelJob(jobId: string): Promise<void>;
   task(id: string): Promise<CentralTaskDetail>;
