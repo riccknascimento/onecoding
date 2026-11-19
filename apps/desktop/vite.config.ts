@@ -6,8 +6,18 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true, host: "127.0.0.1" },
-  build: { target: "safari15", sourcemap: false },
+  server: {
+    port: 1420,
+    strictPort: true,
+    host: "127.0.0.1",
+    // Desenvolvimento da interface Web: encaminha para o OneHub Central em loopback (sem CORS).
+    proxy: { "/central-api": { target: "http://127.0.0.1:8787", rewrite: (path) => path.replace(/^\/central-api/, "") } },
+  },
+  build: {
+    target: "safari15",
+    sourcemap: false,
+    rollupOptions: { input: { main: "index.html", central: "central.html" } },
+  },
   test: {
     globals: true,
     environment: "jsdom",
