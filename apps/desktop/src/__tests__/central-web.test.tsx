@@ -228,6 +228,27 @@ describe("OneAgent Web (OneHub Central): tela", () => {
     expect(await screen.findByRole("heading", { name: "OneExecutors" })).toBeInTheDocument();
   });
 
+  it("mantém Provider AI separado dos workers e abre as conexões a partir de Executors", async () => {
+    const user = await login(fakeTransport());
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    expect(screen.getByText(/Conexões CLI e API; CLI autenticadas no Executor/)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Provider AI/ }).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: /^Executors$/ }));
+    expect(await screen.findByText(/Workers pareados com o OneHub que executam as tarefas autorizadas/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Gerenciar conexões CLI e API" }));
+    expect(window.location.pathname).toBe("/configuracoes/provider-ai");
+    expect(await screen.findByRole("heading", { name: "One Provider AI" })).toBeInTheDocument();
+  });
+
+  it("informa que motor, modelo e prompts do Orquestrador ainda não são configuráveis", async () => {
+    const user = await login(fakeTransport());
+    await user.click(await screen.findByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: /^Orquestrador$/ }));
+    expect(await screen.findByText(/configuração de motor, modelo, prompts e políticas do Orquestrador ainda não está disponível/)).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: /modelo/i })).not.toBeInTheDocument();
+  });
+
   it("sem concessão, o OneNode continua selecionável e a tela mostra o caminho para conceder acesso", async () => {
     const ctx = contextConversation();
     const t = fakeTransport({ grants: vi.fn(async () => []), ...ctx });

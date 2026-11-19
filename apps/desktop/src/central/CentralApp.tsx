@@ -595,7 +595,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
             {shown === "provider" && <ProviderPage transport={transport} isAdmin={isAdmin} />}
             {shown === "settings" && (settingsHome
               ? <SettingsHome isAdmin={isAdmin} nodes={nodes} executors={executors} onSettings={openSettings} onView={navigate} />
-              : <AdminPanel transport={transport} user={user} section={settingsSection} onSection={openSettings} />)}
+              : <AdminPanel transport={transport} user={user} section={settingsSection} onSection={openSettings} onProvider={() => navigate("provider")} />)}
             {shown === "agents" && (
               <UnavailablePage
                 title="Agent"

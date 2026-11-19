@@ -54,6 +54,7 @@ describe("One Provider AI: estados reais das contas de CLI", () => {
   it("mostra as conexões em uma tabela com o estado que veio do OneHub", async () => {
     render(<ProviderPage transport={fakeTransport()} isAdmin />);
     const table = await screen.findByRole("table");
+    expect(screen.getByText(/Contas CLI autenticadas no OneExecutor escolhido/)).toBeInTheDocument();
     expect(within(table).getByText("Claude Empresa 01")).toBeInTheDocument();
     expect(within(table).getByText("Conectada")).toBeInTheDocument();
     expect(within(table).getByText("Desconectada")).toBeInTheDocument();

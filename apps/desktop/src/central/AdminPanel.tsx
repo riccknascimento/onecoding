@@ -47,19 +47,21 @@ export function AdminPanel({
   user,
   section,
   onSection,
+  onProvider,
 }: {
   transport: OneHubTransport;
   user: CentralUser;
   section: SettingsSection;
   onSection(s: SettingsSection): void;
+  onProvider(): void;
 }) {
   if (user.role !== "admin") {
     return <p className="muted">Acesso restrito a administradores.</p>;
   }
-  return <AdminContent transport={transport} section={section} onSection={onSection} />;
+  return <AdminContent transport={transport} section={section} onSection={onSection} onProvider={onProvider} />;
 }
 
-function AdminContent({ transport, section, onSection }: { transport: OneHubTransport; section: SettingsSection; onSection(s: SettingsSection): void }) {
+function AdminContent({ transport, section, onSection, onProvider }: { transport: OneHubTransport; section: SettingsSection; onSection(s: SettingsSection): void; onProvider(): void }) {
   const [health, setHealth] = useState<{ status: string; database: string } | "erro" | null>(null);
   const [nodes, setNodes] = useState<CentralNode[]>([]);
   const [executors, setExecutors] = useState<CentralExecutor[]>([]);
@@ -240,6 +242,7 @@ function AdminContent({ transport, section, onSection }: { transport: OneHubTran
               <h2>OneExecutors</h2>
               {addButton("OneExecutors", "Adicionar OneExecutor")}
             </div>
+            <p className="muted small">Workers pareados com o OneHub que executam as tarefas autorizadas.</p>
             {adding === "OneExecutors" && (
               <form className="admin-form" onSubmit={submitExecutor}>
                 <label>Nome do OneExecutor <input value={execName} onChange={(e) => setExecName(e.target.value)} maxLength={120} required /></label>
@@ -259,6 +262,10 @@ function AdminContent({ transport, section, onSection }: { transport: OneHubTran
                 ))}
               </ul>
             )}
+            <div className="settings-head">
+              <p className="muted small">As contas CLI e conexões API são gerenciadas em Provider AI.</p>
+              <button type="button" className="btn" onClick={onProvider}>Gerenciar conexões CLI e API</button>
+            </div>
           </div>
         )}
 
@@ -324,7 +331,7 @@ function AdminContent({ transport, section, onSection }: { transport: OneHubTran
             <div className="card">
               <h2>OneOrchestrator</h2>
               <p className="muted small">
-                A coordenação por ChatGPT ainda não roda neste OneHub. Nenhum provedor de orquestração está configurado, e nenhuma resposta de IA é simulada.
+                A configuração de motor, modelo, prompts e políticas do Orquestrador ainda não está disponível neste Central. As conexões de IA são gerenciadas em Provider AI; nenhuma orquestração é simulada.
               </p>
             </div>
             <div className="card">

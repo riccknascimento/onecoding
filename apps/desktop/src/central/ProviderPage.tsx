@@ -227,7 +227,7 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
       id: connection.id,
       name: connection.name,
       type: PROVIDERS.find((provider) => provider.id === connection.provider)?.label ?? connection.provider,
-      executor: "API",
+      executor: "OneHub",
       state: { text: "Configurada", tone: "info" as const },
       detail: <p className="muted small">Chave: <code>{connection.key_hint}</code>{connection.default_model ? ` · modelo: ${connection.default_model}` : ""}. O teste de conexão não está disponível.</p>,
       actions: isAdmin ? <button type="button" className="btn ghost" onClick={() => void run(() => transport.deleteProviderConnection(connection.id), "Conexão removida.")}>Remover</button> : null,
@@ -236,12 +236,12 @@ export function ProviderPage({ transport, isAdmin }: { transport: OneHubTranspor
 
   return (
     <div className="page provider-page">
-      <PageHeader title="One Provider AI" subtitle="Gerencie as contas CLI e conexões API usadas pelo OneCoding." actions={isAdmin ? <button className="btn primary provider-add" type="button" onClick={() => setAdding("choose")}><Icon name="plus" /> Adicionar Provider</button> : undefined} />
+      <PageHeader title="One Provider AI" subtitle="Contas CLI autenticadas no OneExecutor escolhido e chaves API cifradas no OneHub. O cadastro não instala CLIs remotamente, e o teste de chaves API ainda não está disponível." actions={isAdmin ? <button className="btn primary provider-add" type="button" onClick={() => setAdding("choose")}><Icon name="plus" /> Adicionar Provider</button> : undefined} />
       {error && <p role="alert" className="error">{error}</p>}
       {notice && <p role="status" className="muted small">{notice}</p>}
       <div className="provider-table-wrap">
         <table className="provider-table">
-          <thead><tr><th>Conexão</th><th>Tipo</th><th>Executor</th><th>Estado</th>{isAdmin && <th>Ações</th>}</tr></thead>
+          <thead><tr><th>Conexão</th><th>Tipo</th><th>Executor / armazenamento</th><th>Estado</th>{isAdmin && <th>Ações</th>}</tr></thead>
           <tbody>
             {accounts === null || (isAdmin && apis === null) ? <tr><td colSpan={isAdmin ? 5 : 4} className="muted">Carregando conexões…</td></tr>
               : rows.length === 0 ? <tr><td colSpan={isAdmin ? 5 : 4} className="provider-empty">Nenhum provider cadastrado. Use “Adicionar Provider” para conectar uma conta.</td></tr>

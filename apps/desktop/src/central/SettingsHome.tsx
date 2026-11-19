@@ -4,10 +4,10 @@ import { Icon } from "../icons";
 import type { IconName } from "../icons";
 
 const settings: { label: SettingsSection | "Provider AI"; icon: IconName; description: string }[] = [
-  { label: "Orquestrador", icon: "chat", description: "Coordenação e políticas de execução." },
-  { label: "OneExecutors", icon: "runs", description: "Motores de execução autorizados." },
+  { label: "Orquestrador", icon: "chat", description: "Motor, modelo e prompts de coordenação (indisponível neste Central)." },
+  { label: "OneExecutors", icon: "runs", description: "Workers pareados com o OneHub que executam as tarefas." },
   { label: "OneNodes", icon: "nodes", description: "Servidores conectados ao OneHub." },
-  { label: "Provider AI", icon: "gateway", description: "Contas e provedores de modelos de IA." },
+  { label: "Provider AI", icon: "gateway", description: "Conexões CLI e API; CLI autenticadas no Executor e chaves cifradas no OneHub." },
 ];
 const resources: { label: string; view: CentralView; icon: IconName }[] = [
   { label: "Agent", view: "agents", icon: "bot" },
