@@ -345,6 +345,15 @@ describe("OneAgent Web: Markdown seguro", () => {
 });
 
 describe("transporte HTTP do OneHub", () => {
+  it("rejeita o fallback HTML da SPA como resposta inválida da API", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<!doctype html><html></html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    }));
+    const t = createHttpTransport("/central-api");
+    await expect(t.conversations()).rejects.toMatchObject({ status: 200, code: "invalid_response" });
+  });
+
   it("sem token no navegador: cookie enviado pelo navegador e nada guardado em armazenamento", async () => {
     const calls: { url: string; init?: RequestInit }[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
