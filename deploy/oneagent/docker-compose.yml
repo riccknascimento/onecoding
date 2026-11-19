@@ -1,0 +1,48 @@
+# OneCoding (OneHub Central + Caddy). Um único supervisor: o próprio Docker, com restart=unless-stopped.
+# Ambos em network_mode: host — o Central fala com o PostgreSQL em 127.0.0.1:5432 (que continua acessível
+# somente localmente) e o Caddy com o Central em 127.0.0.1:8787. Nenhuma porta do banco é exposta.
+x-logs: &logs
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  central:
+    build:
+      context: ../..
+      dockerfile: deploy/oneagent/central/Dockerfile
+    image: oneagent/central:current
+    restart: unless-stopped
+    network_mode: host
+    user: "10001:10001"
+    env_file: ${CENTRAL_ENV_FILE:-/etc/oneagent-central/central.env}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logs
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      central:
+        condition: service_healthy
+    command: ["caddy", "run", "--config", "/etc/caddy/${CADDY_CONFIG:-Caddyfile}", "--adapter", "caddyfile"]
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - ${WEB_DIR:-./web}:/srv:ro
+      - ./logs:/var/log/caddy
+      - caddy-data:/data
+      - caddy-config:/config
+    logging: *logs
+
+volumes:
+  caddy-data:
+  caddy-config:

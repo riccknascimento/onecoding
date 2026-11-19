@@ -1,0 +1,19 @@
+[package]
+name = "one-node"
+description = "OneNode: agente remoto do OneAgent. Ferramentas tipadas e confinadas ao workspace, sem credenciais de IA."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+one-exec.workspace = true
+reqwest = { version = "0.13.5", features = ["blocking", "json"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+axum = "0.8"
+one-central = { path = "../one-central" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }

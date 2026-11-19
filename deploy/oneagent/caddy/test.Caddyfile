@@ -1,0 +1,9 @@
+# TESTE LOCAL (não público): certificado interno, escuta só em 127.0.0.1, portas altas. Usado para validar rotas,
+# cabeçalhos e SSE sem expor nada na internet.
+{
+	default_bind 127.0.0.1
+	http_port 18080
+	https_port 18443
+	local_certs
+}
+import sites.caddy

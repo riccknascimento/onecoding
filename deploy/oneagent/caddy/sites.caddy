@@ -1,0 +1,44 @@
+# Sites OneCoding (importados pelo Caddyfile de produção e pelo de teste).
+app.oneagente.tech {
+	encode zstd gzip
+	@raiz path /
+	rewrite @raiz /central.html
+	root * /srv
+	try_files {path} /central.html
+	file_server
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; connect-src 'self' https://hub.oneagente.tech; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'"
+	}
+	log {
+		output file /var/log/caddy/app.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format json
+	}
+}
+
+hub.oneagente.tech {
+	encode zstd gzip
+	request_body {
+		max_size 1MB
+	}
+	# SSE: sem buffer, para o stream de eventos chegar na hora. O Caddy acrescenta o IP do cliente ao X-Forwarded-For.
+	reverse_proxy 127.0.0.1:8787 {
+		flush_interval -1
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+	}
+	log {
+		output file /var/log/caddy/hub.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format json
+	}
+}

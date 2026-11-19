@@ -1,0 +1,24 @@
+[package]
+name = "one-provisioner"
+description = "Provisionador do OneNode: SSH com validação de fingerprint, isolado do OneHub Central."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+
+[features]
+# Somente para testes ponta a ponta em ambiente isolado: permite loopback como destino de teste.
+# Nunca habilitado no binário de produção.
+e2e = []
+
+[dependencies]
+russh = "0.65"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
+thiserror = "2"
+zeroize = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = "0.8"
+uuid = { version = "1", features = ["v4", "serde"] }
+sha2 = "0.10"

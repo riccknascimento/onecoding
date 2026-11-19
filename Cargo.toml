@@ -7,6 +7,10 @@ members = [
   "crates/one-exec",
   "crates/one-orchestrator",
   "crates/one-chatgpt",
+  "crates/one-central",
+  "crates/one-node",
+  "crates/one-provisioner",
+  "crates/one-executor",
   "apps/desktop/src-tauri",
 ]
 

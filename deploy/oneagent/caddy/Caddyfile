@@ -1,0 +1,5 @@
+# Produção: HTTPS automático (ACME) para app.oneagente.tech e hub.oneagente.tech. Só ativo após autorização.
+{
+	email {$ACME_EMAIL}
+}
+import sites.caddy

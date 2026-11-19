@@ -34,6 +34,22 @@ const paths = {
       <path d="M3 3v5h5M12 7v5l3 2" />
     </>
   ),
+  nodes: (
+    <>
+      <rect x="4" y="3" width="16" height="6" rx="1.5" />
+      <rect x="4" y="15" width="16" height="6" rx="1.5" />
+      <path d="M12 9v6M8 6.5h.01M8 18.5h.01" />
+    </>
+  ),
+  book: <path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5Zm0 0v16M9 8h6" />,
+  bot: (
+    <>
+      <rect x="5" y="8" width="14" height="11" rx="2.5" />
+      <path d="M12 4v4M9 13h.01M15 13h.01M9 17h6" />
+    </>
+  ),
+  list: <path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" />,
+  alert: <path d="M12 3 2 20h20L12 3Zm0 6v5m0 3h.01" />,
 } satisfies Record<string, ReactNode>;
 
 export type IconName = keyof typeof paths;
