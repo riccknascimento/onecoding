@@ -170,10 +170,14 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
         if (alive) {
           const available = await transport.workspaces();
           const stored = window.localStorage.getItem(`onecoding.open-workspaces.${u.id}`);
+          const storedActive = window.localStorage.getItem(`onecoding.active-workspace.${u.id}`);
           let valid: string[] = [];
           try { valid = stored ? (JSON.parse(stored) as string[]).filter((id) => available.some((workspace) => workspace.id === id)) : []; } catch { valid = []; }
           const requested = new URLSearchParams(window.location.search).get("workspace");
-          const chosen = requested && available.some((workspace) => workspace.id === requested) ? requested : valid[0] ?? available[0]?.id ?? null;
+          const savedActive = storedActive && available.some((workspace) => workspace.id === storedActive) ? storedActive : null;
+          const chosen = requested && available.some((workspace) => workspace.id === requested)
+            ? requested
+            : storedActive === "settings" ? null : savedActive ?? valid[0] ?? available[0]?.id ?? null;
           const tabs = Array.from(new Set([...valid, ...(chosen ? [chosen] : [])]));
           setOpenTabs(tabs);
           setActiveWorkspaceId(chosen);
@@ -270,9 +274,11 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
       const c = await refreshLists();
       const available = await transport.workspaces();
       const stored = window.localStorage.getItem(`onecoding.open-workspaces.${signedIn.id}`);
+      const storedActive = window.localStorage.getItem(`onecoding.active-workspace.${signedIn.id}`);
       let valid: string[] = [];
       try { valid = stored ? (JSON.parse(stored) as string[]).filter((id) => available.some((workspace) => workspace.id === id)) : []; } catch { valid = []; }
-      const chosen = valid[0] ?? available[0]?.id ?? null;
+      const savedActive = storedActive && available.some((workspace) => workspace.id === storedActive) ? storedActive : null;
+      const chosen = storedActive === "settings" ? null : savedActive ?? valid[0] ?? available[0]?.id ?? null;
       const tabs = Array.from(new Set([...valid, ...(chosen ? [chosen] : [])]));
       setOpenTabs(tabs);
       setActiveWorkspaceId(chosen);
@@ -345,8 +351,11 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   };
 
   useEffect(() => {
-    if (user) window.localStorage.setItem(`onecoding.open-workspaces.${user.id}`, JSON.stringify(openTabs));
-  }, [openTabs, user]);
+    if (user) {
+      window.localStorage.setItem(`onecoding.open-workspaces.${user.id}`, JSON.stringify(openTabs));
+      window.localStorage.setItem(`onecoding.active-workspace.${user.id}`, activeWorkspaceId ?? "settings");
+    }
+  }, [openTabs, activeWorkspaceId, user]);
 
   /** Persiste o contexto escolhido na conversa ativa (cria a conversa se ainda não existir). */
   const persistContext = async (node: string, project: string) => {
