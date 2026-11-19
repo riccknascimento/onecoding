@@ -3,7 +3,7 @@ import type { CentralConversation } from "../transport";
 import { Icon } from "../icons";
 import type { IconName } from "../icons";
 
-export type CentralView = "chat" | "onenodes" | "projects" | "context" | "skills" | "executions" | "settings";
+export type CentralView = "chat" | "onenodes" | "provider" | "projects" | "context" | "skills" | "executions" | "settings";
 
 interface NavItem {
   view: CentralView;
@@ -16,6 +16,7 @@ interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { view: "chat", label: "Chat / Orquestrador", icon: "chat" },
   { view: "onenodes", label: "OneNodes", icon: "nodes", adminOnly: true },
+  { view: "provider", label: "One Provider AI", icon: "gateway", adminOnly: true },
   { view: "projects", label: "Projetos", icon: "projects" },
   { view: "context", label: "OneContext", icon: "book" },
   { view: "skills", label: "Skills & Agents", icon: "bot" },

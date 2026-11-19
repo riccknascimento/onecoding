@@ -107,6 +107,47 @@ export interface CentralExecutor {
   status: "online" | "offline" | "pending" | "revoked";
 }
 
+export type CliEngine = "codex" | "claude" | "cursor";
+export type CliAuthState = "unknown" | "authenticated" | "unauthenticated";
+export type CliAction = "login" | "status" | "logout";
+
+/** Sessão de login, verificação ou desconexão de uma conta de CLI (sem nenhum segredo). */
+export interface CliSessionView {
+  id: string;
+  action: CliAction;
+  state: string;
+  url: string | null;
+  device_code: string | null;
+  awaiting_code: boolean;
+  result: string | null;
+}
+
+/** Conta de CLI: uma conexão própria, com perfil isolado no OneExecutor que a administra. */
+export interface CliConnection {
+  id: string;
+  name: string;
+  engine: CliEngine;
+  executor_id: string;
+  executor_name: string;
+  usage_authorized: boolean;
+  auth_state: CliAuthState;
+  auth_checked_at: string | null;
+  session: CliSessionView | null;
+}
+
+export type ApiProvider = "openrouter" | "openai" | "gemini" | "anthropic";
+
+/** Conexão por API Key. A chave nunca volta ao navegador: só a dica dos últimos caracteres. */
+export interface ProviderConnection {
+  id: string;
+  name: string;
+  provider: ApiProvider;
+  key_hint: string;
+  default_model: string | null;
+  status: string;
+  created_at: string;
+}
+
 export interface TurnInput {
   text: string;
   node_id?: string;
@@ -181,6 +222,18 @@ export interface OneHubTransport {
   messages(conversationId: string): Promise<CentralMessage[]>;
   turn(conversationId: string, input: TurnInput): Promise<TurnResult>;
   state(conversationId: string): Promise<ConversationSnapshot>;
+  /** One Provider AI: contas de CLI (administração). */
+  cliConnections(): Promise<CliConnection[]>;
+  createCliConnection(input: { name: string; engine: CliEngine; executor_id: string }): Promise<unknown>;
+  startCliAction(id: string, action: CliAction): Promise<CliSessionView>;
+  cancelCliSession(sessionId: string): Promise<void>;
+  submitCliCode(sessionId: string, code: string): Promise<void>;
+  setCliUsage(id: string, allowed: boolean): Promise<void>;
+  deleteCliConnection(id: string): Promise<void>;
+  /** One Provider AI: conexões por API Key (administração). */
+  providerConnections(): Promise<ProviderConnection[]>;
+  createProviderConnection(input: { name: string; provider: ApiProvider; api_key: string; default_model?: string }): Promise<unknown>;
+  deleteProviderConnection(id: string): Promise<void>;
   subscribe(conversationId: string, options: SubscribeOptions): Subscription;
   cancelJob(jobId: string): Promise<void>;
   task(id: string): Promise<CentralTaskDetail>;

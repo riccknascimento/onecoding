@@ -5,6 +5,9 @@ import type {
   CentralExecutor,
   CentralGrant,
   CentralJob,
+  CliConnection,
+  CliSessionView,
+  ProviderConnection,
   CentralConversation,
   CentralMessage,
   CentralNode,
@@ -179,5 +182,17 @@ export function createHttpTransport(base = DEFAULT_API_BASE): OneHubTransport {
     task: (id) => request<CentralTaskDetail>("GET", `/v1/tasks/${id}`),
     job: (id) => request<CentralJob>("GET", `/v1/jobs/${id}`),
     executors: () => request<CentralExecutor[]>("GET", "/v1/executors"),
+    cliConnections: () => request<{ connections: CliConnection[] }>("GET", "/v1/cli-connections").then((d) => d.connections),
+    createCliConnection: (input) =>
+      request("POST", "/v1/cli-connections", { ...input, usage_authorized: true }),
+    startCliAction: (id, action) =>
+      request<{ session: CliSessionView }>("POST", `/v1/cli-connections/${id}/${action}`).then((d) => d.session),
+    cancelCliSession: (sessionId) => request<unknown>("POST", `/v1/cli-sessions/${sessionId}/cancel`).then(() => undefined),
+    submitCliCode: (sessionId, code) => request<unknown>("POST", `/v1/cli-sessions/${sessionId}/code`, { code }).then(() => undefined),
+    setCliUsage: (id, allowed) => request<unknown>("POST", `/v1/cli-connections/${id}/usage`, { usage_authorized: allowed }).then(() => undefined),
+    deleteCliConnection: (id) => request<unknown>("DELETE", `/v1/cli-connections/${id}`).then(() => undefined),
+    providerConnections: () => request<{ connections: ProviderConnection[] }>("GET", "/v1/provider-connections").then((d) => d.connections),
+    createProviderConnection: (input) => request("POST", "/v1/provider-connections", input),
+    deleteProviderConnection: (id) => request<unknown>("DELETE", `/v1/provider-connections/${id}`).then(() => undefined),
   };
 }

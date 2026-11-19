@@ -12,6 +12,7 @@ import { OneNodesPage } from "./OneNodesPage";
 import { Sidebar, type CentralView } from "./Sidebar";
 import { CENTRAL_OPTION, ChatContextBar } from "./ChatContextBar";
 import { ProjectsPage, ExecutionsPage, UnavailablePage } from "./pages";
+import { ProviderPage } from "./ProviderPage";
 
 const STREAM_LABEL: Record<StreamStatus, { text: string; tone: string }> = {
   idle: { text: "Aguardando conversa", tone: "info" },
@@ -317,7 +318,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
   const tick = chat ? `${chat.lastSeq}:${messages.length}:${Object.values(chat.jobs).map((j) => `${j.status}${j.timeline.length}`).join(",")}` : null;
 
   const isAdmin = user.role === "admin";
-  const shown: CentralView = (view === "onenodes" || view === "settings") && !isAdmin ? "chat" : view;
+  const shown: CentralView = (view === "onenodes" || view === "settings" || view === "provider") && !isAdmin ? "chat" : view;
   const ctxNodeId = active?.node_id ?? CENTRAL_OPTION;
   const ctxProjectId = active?.project_id ?? "";
 
@@ -423,6 +424,7 @@ export function CentralApp({ transport = webTransport }: { transport?: OneHubTra
           </header>
           <div className="page-scroll">
             {shown === "onenodes" && <OneNodesPage transport={transport} />}
+            {shown === "provider" && <ProviderPage transport={transport} isAdmin={isAdmin} />}
             {shown === "settings" && <AdminPanel transport={transport} user={user} />}
             {shown === "projects" && <ProjectsPage transport={transport} isAdmin={isAdmin} onOpenOneNodes={() => setView("onenodes")} />}
             {shown === "executions" && <ExecutionsPage transport={transport} />}
